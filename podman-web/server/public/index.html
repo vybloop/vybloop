@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Podman Web</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 3rem 1rem;
+      min-height: 100vh;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 2rem;
+      color: #a0c4ff;
+    }
+
+    #run-btn {
+      padding: 0.75rem 2rem;
+      font-size: 1rem;
+      background: #3a86ff;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    #run-btn:hover:not(:disabled) { background: #2563eb; }
+    #run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #output-panel {
+      margin-top: 2rem;
+      width: 100%;
+      max-width: 720px;
+      background: #0d0d1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    #output-header {
+      padding: 0.5rem 1rem;
+      background: #16213e;
+      font-size: 0.8rem;
+      color: #888;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    #output {
+      padding: 1rem;
+      font-family: "Courier New", monospace;
+      font-size: 0.875rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      min-height: 6rem;
+      line-height: 1.5;
+    }
+
+    .status-ok  { color: #6ee7b7; }
+    .status-err { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <h1>Podman Web Runner</h1>
+
+  <button id="run-btn">Run hello-world</button>
+
+  <div id="output-panel">
+    <div id="output-header">
+      <span>Output</span>
+      <span id="exit-code"></span>
+    </div>
+    <pre id="output">Press the button to run the hello-world container.</pre>
+  </div>
+
+  <script>
+    const btn = document.getElementById('run-btn');
+    const output = document.getElementById('output');
+    const exitCodeEl = document.getElementById('exit-code');
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      output.textContent = 'Running…';
+      output.className = '';
+      exitCodeEl.textContent = '';
+
+      try {
+        const res = await fetch('/api/run', { method: 'POST' });
+        const data = await res.json();
+
+        output.textContent = data.output || '(no output)';
+        exitCodeEl.textContent = `exit ${data.exitCode}`;
+
+        if (data.exitCode === 0) {
+          output.className = 'status-ok';
+          exitCodeEl.className = 'status-ok';
+        } else {
+          output.className = 'status-err';
+          exitCodeEl.className = 'status-err';
+        }
+      } catch (err) {
+        output.textContent = `Error: ${err.message}`;
+        output.className = 'status-err';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

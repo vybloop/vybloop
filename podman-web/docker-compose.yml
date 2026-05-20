@@ -1,0 +1,11 @@
+services:
+  podman-web:
+    image: podman-web:latest
+
+    privileged: true
+
+    tmpfs:
+      - /home/poduser/.local/share/containers:uid=1000,gid=1000,mode=0755
+
+    ports:
+      - "9876:3000"
