@@ -1,0 +1,24 @@
+services:
+  podman-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # privileged is required so that rootless podman inside the container can
+    # create user namespaces and mount proc inside them.  Docker's default
+    # security settings (masked paths, restricted mount syscalls) block proc
+    # mounting inside user namespaces even with SYS_ADMIN + seccomp/apparmor
+    # unconfined; privileged removes those restrictions entirely.
+    privileged: true
+
+    # ── Storage ──────────────────────────────────────────────────────────────
+    # tmpfs avoids the named-volume root-ownership problem entirely.
+    # Inner container layers live in RAM — fast, and no permission issues.
+    # If you need persistence across restarts, see the note below.
+    tmpfs:
+      - /home/poduser/.local/share/containers:uid=1000,gid=1000,mode=0755
+
+    # ── Runtime ──────────────────────────────────────────────────────────────
+    stdin_open: true
+    tty: true
+
