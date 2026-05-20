@@ -48,6 +48,22 @@ ws.onerror = () => {
   statusEl.className = 'error';
 };
 
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key === 'v' && document.activeElement === term.textarea) {
+    e.stopImmediatePropagation();
+    // no preventDefault — browser fires paste event on the textarea,
+    // which xterm's own paste handler picks up and sends to the terminal
+  }
+}, true);
+
+term.attachCustomKeyEventHandler((e) => {
+  if (e.type === 'keydown' && e.ctrlKey && e.key === 'c' && term.hasSelection()) {
+    document.execCommand('copy');
+    return false;
+  }
+  return true;
+});
+
 term.onData((data) => {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'input', data }));
