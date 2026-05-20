@@ -28,7 +28,8 @@ wss.on('connection', (ws) => {
   const shell = pty.spawn('podman', [
     'run', '--rm', '-it',
     '-v', '/project:/project',
-    '-v', '/home/poduser/claude-root:/root',
+    '-v', '/home/poduser/claudeconfig:/claudeconfig',
+    '--env', 'CLAUDE_CONFIG_DIR=/claudeconfig',
     '-w', '/project',
     '--env', 'ANTHROPIC_API_KEY',
     '--env', 'IS_SANDBOX=1',

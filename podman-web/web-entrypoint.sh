@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-mkdir -p /home/poduser/claude-root
-chown poduser:poduser /home/poduser/claude-root
+mkdir -p /home/poduser/claudeconfig
+chown poduser:poduser /home/poduser/claudeconfig
 
 mkdir -p /project
 chown poduser:poduser /project

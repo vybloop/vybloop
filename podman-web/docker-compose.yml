@@ -11,7 +11,7 @@ services:
     volumes:
       - podman_storage:/home/poduser/.local/share/containers
       - ./project:/project
-      - ./claude-config:/home/poduser/claude-root
+      - ./claude-config:/home/poduser/claudeconfig
 
     environment:
       - ANTHROPIC_API_KEY
