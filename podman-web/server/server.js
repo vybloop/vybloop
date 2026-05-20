@@ -33,6 +33,7 @@ wss.on('connection', (ws) => {
     '-w', '/project',
     '--env', 'ANTHROPIC_API_KEY',
     '--env', 'IS_SANDBOX=1',
+    '--env', 'COLORTERM=truecolor',
     'claude-inner',
     'claude', '--dangerously-skip-permissions',
   ], {

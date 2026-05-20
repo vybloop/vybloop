@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 const term = new Terminal({
   cursorBlink: true,
   scrollback: 1000,
+  fontFamily: '"Cascadia Code", monospace',
   theme: {
     background: '#1a1a2e',
     foreground: '#e0e0e0',

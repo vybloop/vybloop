@@ -40,7 +40,12 @@ Built on top of `podman-base`. The Dockerfile has two stages:
 ### Backend (`podman-web/server/`)
 Express server on port 3000. Two capabilities:
 1. **HTTP POST `/api/run`** — runs a shell command via `child_process.exec()` and returns combined stdout/stderr + exit code as JSON.
-2. **WebSocket `/terminal`** — on upgrade, spawns `podman run --rm -it busybox sh` via `node-pty` (PTY), bridges the PTY to the WebSocket. Client sends `{type:"input", data}` or `{type:"resize", cols, rows}` as JSON; server sends raw PTY output as binary buffers.
+2. **WebSocket `/terminal`** — on upgrade, spawns the inner container via `node-pty` (PTY), bridges the PTY to the WebSocket. Client sends `{type:"input", data}` or `{type:"resize", cols, rows}` as JSON; server sends raw PTY output as binary buffers.
+
+**Inner container launch** (`podman-web/server/server.js`, `wss.on('connection')`) — runs `podman run --rm -it claude-inner claude --dangerously-skip-permissions` with these mounts and env vars:
+- `/project` → `/project` (bind mount), working dir set to `/project`
+- `/home/poduser/claudeconfig` → `/claudeconfig`, `CLAUDE_CONFIG_DIR=/claudeconfig`
+- `ANTHROPIC_API_KEY` (passed through from host), `IS_SANDBOX=1`, `COLORTERM=truecolor`
 
 The HTTP server is created explicitly (`http.createServer(app)`) so the WebSocket server can share the same port via the `upgrade` event.
 
