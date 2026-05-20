@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+podman system migrate
+
 if ! podman image exists claude-inner 2>/dev/null; then
     echo "[start] Building claude-inner image (this may take a few minutes on first run)..."
     podman build -t claude-inner /app/inner-container/
