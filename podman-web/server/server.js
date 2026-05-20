@@ -25,7 +25,16 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 wss.on('connection', (ws) => {
-  const shell = pty.spawn('podman', ['run', '--rm', '-it', 'busybox', 'sh'], {
+  const shell = pty.spawn('podman', [
+    'run', '--rm', '-it',
+    '-v', '/project:/project',
+    '-v', '/home/poduser/claude-root:/root',
+    '-w', '/project',
+    '--env', 'ANTHROPIC_API_KEY',
+    '--env', 'IS_SANDBOX=1',
+    'claude-inner',
+    'claude', '--dangerously-skip-permissions',
+  ], {
     name: 'xterm-256color',
     cols: 80,
     rows: 24,

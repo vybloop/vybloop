@@ -21,8 +21,15 @@ RUN npm install --omit=dev
 
 COPY server/ ./
 COPY --from=frontend-builder /frontend/dist ./public
+COPY inner-container/ ./inner-container/
+COPY start.sh ./start.sh
 
-RUN chown -R poduser:poduser /app
+RUN chmod +x /app/start.sh && \
+    chown -R poduser:poduser /app
 
+COPY web-entrypoint.sh /web-entrypoint.sh
+RUN chmod +x /web-entrypoint.sh
+
+ENTRYPOINT ["/web-entrypoint.sh"]
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["/app/start.sh"]
