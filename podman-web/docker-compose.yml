@@ -1,6 +1,7 @@
 services:
   podman-web:
-    image: podman-web:latest
+    build: .
+    container_name: podman-web
 
     privileged: true
 

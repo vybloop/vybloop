@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Podman Web Terminal</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      font-family: system-ui, sans-serif;
+    }
+
+    header {
+      padding: 0.6rem 1.25rem;
+      background: #16213e;
+      color: #a0c4ff;
+      font-size: 1rem;
+      border-bottom: 1px solid #2a2a4a;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-shrink: 0;
+    }
+
+    #status {
+      font-size: 0.75rem;
+      color: #888;
+    }
+    #status.connected  { color: #6ee7b7; }
+    #status.error      { color: #fca5a5; }
+
+    #terminal-container {
+      flex: 1;
+      padding: 4px;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span>Podman Web Terminal</span>
+    <span id="status">Connecting…</span>
+  </header>
+  <div id="terminal-container"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
