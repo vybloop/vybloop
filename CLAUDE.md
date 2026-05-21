@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+NOTE: The files in podman and podman-web are not currently integrated into the main application. The main application is the `frontend` and `backend` directories, which are built by the `Dockerfile` in the root of the repo. Any requests to add functionality refers to the main application unless otherwise specified.
+
 ## Build & Run
 
 ```bash

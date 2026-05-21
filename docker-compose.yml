@@ -4,5 +4,8 @@ services:
     ports:
       - "9876:3000"
     restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
     volumes:
       - ./data:/data
