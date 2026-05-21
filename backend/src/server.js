@@ -4,7 +4,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import * as pty from 'node-pty';
+import { TerminalSession } from './terminal-session.js';
 import {
   getProjects,
   getProject,
@@ -93,46 +93,22 @@ app.get('*', (req, res) => {
   res.sendFile(join(__dirname, '../public/index.html'));
 });
 
-// Per-project terminal sessions: Map<projectId, { pty, clients: Set<WebSocket>, scrollback: Buffer[] }>
+// Per-project terminal sessions: Map<`${projectId}:${type}`, TerminalSession>
+// type is 'agent' | 'shell' | 'logs'
 const sessions = new Map();
-const SCROLLBACK_LIMIT = 500;
 
-const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+function sessionKey(projectId, type) {
+  return `${projectId}:${type}`;
+}
 
-server.on('upgrade', (req, socket, head) => {
-  const match = req.url.match(/^\/api\/projects\/([^/]+)\/terminal$/);
-  if (match) {
-    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req, match[1]));
-  } else {
-    socket.destroy();
-  }
-});
+// tmux session names must not contain colons; use hyphens
+function tmuxName(projectId, type) {
+  return `loop-${projectId}-${type}`;
+}
 
-wss.on('connection', async (ws, req, projectId) => {
-  const project = await getProject(projectId);
-  if (!project) {
-    ws.close(1008, 'project not found');
-    return;
-  }
-
-  if (sessions.has(projectId)) {
-    // Reconnect to existing session: replay scrollback then attach
-    const session = sessions.get(projectId);
-    for (const chunk of session.scrollback) {
-      ws.send(chunk);
-    }
-    session.clients.add(ws);
-    // Resize the PTY to this client's terminal size if it sends one
-    ws.on('message', msg => handleInput(session.pty, msg));
-    ws.on('close', () => session.clients.delete(ws));
-    return;
-  }
-
-  // Spawn a new container for this project
-  const repoPath = `/data/${projectId}/git`;
-  const shell = pty.spawn('podman', [
-    'run', '--rm', '-it',
+const SESSION_COMMANDS = {
+  agent: (repoPath) => [
+    'podman', 'run', '--rm', '-it',
     '-v', `${repoPath}:/project`,
     '-v', '/claudeconfig:/claudeconfig',
     '--env', 'CLAUDE_CONFIG_DIR=/claudeconfig',
@@ -142,52 +118,76 @@ wss.on('connection', async (ws, req, projectId) => {
     '-w', '/project',
     'claude-inner',
     'claude', '--dangerously-skip-permissions',
-  ], {
-    name: 'xterm-256color',
-    cols: 80,
-    rows: 24,
+  ],
+  shell: (repoPath) => [
+    'podman', 'run', '--rm', '-it',
+    '-v', `${repoPath}:/project`,
+    '-w', '/project',
+    'claude-inner',
+    'bash',
+  ],
+};
+
+async function getOrCreateSession(projectId, type, repoPath) {
+  const key = sessionKey(projectId, type);
+  const existing = sessions.get(key);
+  if (existing?.alive) return existing;
+  if (existing) sessions.delete(key);
+
+  const makeCommand = SESSION_COMMANDS[type];
+  if (!makeCommand) return null;
+
+  const session = new TerminalSession({
+    sessionKey: tmuxName(projectId, type),
+    command: makeCommand(repoPath),
     cwd: process.env.HOME || '/home/poduser',
-    env: process.env,
   });
+  session.onExit = () => sessions.delete(key);
 
-  const session = { pty: shell, clients: new Set([ws]), scrollback: [] };
-  sessions.set(projectId, session);
+  try {
+    await session.start();
+  } catch (err) {
+    console.error(`Failed to start tmux session ${tmuxName(projectId, type)}:`, err.message);
+    return null;
+  }
 
-  shell.onData(data => {
-    const buf = Buffer.from(data);
-    session.scrollback.push(buf);
-    if (session.scrollback.length > SCROLLBACK_LIMIT) session.scrollback.shift();
-    for (const client of session.clients) {
-      if (client.readyState === 1) client.send(buf);
-    }
-  });
+  sessions.set(key, session);
+  return session;
+}
 
-  shell.onExit(() => {
-    sessions.delete(projectId);
-    for (const client of session.clients) {
-      if (client.readyState === 1) {
-        client.send(Buffer.from('\r\n\x1b[31m[Session ended]\x1b[0m\r\n'));
-        client.close();
-      }
-    }
-  });
+const server = createServer(app);
+const wss = new WebSocketServer({ noServer: true });
 
-  ws.on('message', msg => handleInput(shell, msg));
-  ws.on('close', () => session.clients.delete(ws));
+server.on('upgrade', (req, socket, head) => {
+  // /api/projects/:id/ws/:type  (type = agent | shell | logs)
+  const match = req.url.match(/^\/api\/projects\/([^/]+)\/ws\/([^/]+)$/);
+  if (match) {
+    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req, match[1], match[2]));
+  } else {
+    socket.destroy();
+  }
 });
 
-function handleInput(shell, msg) {
-  try {
-    const obj = JSON.parse(msg);
-    if (obj.type === 'input') {
-      shell.write(obj.data);
-    } else if (obj.type === 'resize') {
-      shell.resize(obj.cols, obj.rows);
-    }
-  } catch {
-    shell.write(msg.toString());
+wss.on('connection', async (ws, req, projectId, sessionType) => {
+  const project = await getProject(projectId);
+  if (!project) {
+    ws.close(1008, 'project not found');
+    return;
   }
-}
+
+  const repoPath = `/data/${projectId}/git`;
+  const session = await getOrCreateSession(projectId, sessionType, repoPath);
+
+  if (!session) {
+    ws.close(1008, 'unknown session type');
+    return;
+  }
+
+  const ok = await session.attach(ws);
+  if (!ok) {
+    ws.close(1011, 'session not available');
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

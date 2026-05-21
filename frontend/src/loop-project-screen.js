@@ -643,7 +643,7 @@ class LoopProjectScreen extends LitElement {
   _connectWs() {
     if (!this.project) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/api/projects/${this.project.id}/terminal`);
+    const ws = new WebSocket(`${proto}://${location.host}/api/projects/${this.project.id}/ws/agent`);
     ws.binaryType = 'arraybuffer';
     this._termWs = ws;
 

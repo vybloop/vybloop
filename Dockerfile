@@ -8,13 +8,14 @@ RUN npm run build
 FROM podman-base:latest
 USER root
 
-RUN apt-get update && apt-get install -y nodejs npm python3 build-essential \
+RUN apt-get update && apt-get install -y nodejs npm python3 build-essential tmux \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY backend/package*.json ./
 RUN npm ci --omit=dev
 COPY backend/src ./src
+COPY backend/tmux.conf ./
 COPY --from=frontend-builder /build/dist ./public
 COPY inner-container/ ./inner-container/
 COPY start.sh app-entrypoint.sh ./
