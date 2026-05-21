@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -126,19 +126,26 @@ function injectGithubToken(repoUrl) {
 
 export function cloneRepo(id, repoUrl) {
   const cloneUrl = injectGithubToken(repoUrl);
-  const destDir = `/data/${id}/git`;
-  mkdirSync(`/data/${id}`, { recursive: true });
+  const dataDir = `/data/${id}`;
+  const destDir = `${dataDir}/git`;
+  mkdirSync(dataDir, { recursive: true });
   projectStatus[id] = 'cloning';
 
   const proc = spawn('git', ['clone', cloneUrl, destDir]);
   proc.on('close', (code) => {
-    projectStatus[id] = code === 0 ? 'idle' : 'error';
     if (code === 0) {
-      const project = projects.find(p => p.id === id);
-      if (project) {
-        project.lastActivity = new Date().toISOString();
-        persist();
-      }
+      // Files must be owned by whoever runs podman so the inner container's root maps correctly
+      const owner = `${process.getuid()}:${process.getgid()}`;
+      execFile('chown', ['-R', owner, dataDir], () => {
+        projectStatus[id] = 'idle';
+        const project = projects.find(p => p.id === id);
+        if (project) {
+          project.lastActivity = new Date().toISOString();
+          persist();
+        }
+      });
+    } else {
+      projectStatus[id] = 'error';
     }
   });
 }
