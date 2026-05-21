@@ -1,0 +1,56 @@
+:root {
+  --bg-0: oklch(0.16 0.005 60);
+  --bg-1: oklch(0.20 0.006 60);
+  --bg-2: oklch(0.235 0.007 60);
+  --bg-3: oklch(0.28 0.008 60);
+  --bg-hover: oklch(0.32 0.008 60);
+  --line: oklch(0.32 0.008 60);
+  --line-soft: oklch(0.26 0.008 60);
+  --fg-0: oklch(0.97 0.005 90);
+  --fg-1: oklch(0.85 0.008 80);
+  --fg-2: oklch(0.65 0.01 75);
+  --fg-3: oklch(0.50 0.012 75);
+  --accent: oklch(0.84 0.18 130);
+  --accent-fg: oklch(0.18 0.04 130);
+  --accent-soft: oklch(0.84 0.18 130 / 0.16);
+  --warn: oklch(0.78 0.16 65);
+  --add: oklch(0.78 0.16 145);
+  --mod: oklch(0.78 0.14 80);
+  --del: oklch(0.72 0.18 25);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@keyframes pulseDot {
+  0%   { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  70%  { box-shadow: 0 0 0 6px transparent; opacity: 0.85; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 0.7; }
+  50.01%, 100% { opacity: 0; }
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+loop-app {
+  display: block;
+  height: 100vh;
+}

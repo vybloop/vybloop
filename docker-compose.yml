@@ -1,0 +1,6 @@
+services:
+  loop:
+    build: .
+    ports:
+      - "9876:3000"
+    restart: unless-stopped

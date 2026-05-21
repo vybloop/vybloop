@@ -1,0 +1,935 @@
+import { LitElement, html, css } from 'lit';
+import './loop-top-bar.js';
+import {
+  iconArrowLeft, iconPlay, iconStop, iconChevronDown, iconRefresh,
+  iconExternal, iconTerminal, iconSparkle, iconCopy, iconCheck,
+  iconBranch, iconChevron
+} from './icons.js';
+
+class LoopProjectScreen extends LitElement {
+  static properties = {
+    project: { type: Object },
+    _files: { state: true },
+    _running: { state: true },
+    _commitMsg: { state: true },
+    _activeTab: { state: true },
+    _committing: { state: true },
+    _committed: { state: true },
+    _loading: { state: true },
+  };
+
+  static styles = css`
+    :host {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+      background: var(--bg-0);
+    }
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 320px;
+      flex-shrink: 0;
+      background: var(--bg-0);
+      border-right: 1px solid var(--line-soft);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .sidebar-top {
+      padding: 12px;
+      border-bottom: 1px solid var(--line-soft);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .run-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .run-btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: 34px;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: opacity 0.12s, background 0.12s;
+    }
+    .run-btn.idle {
+      background: var(--accent);
+      color: var(--accent-fg);
+    }
+    .run-btn.running {
+      background: oklch(0.72 0.18 25 / 0.15);
+      color: var(--del);
+      border: 1px solid oklch(0.72 0.18 25 / 0.3);
+    }
+    .run-btn:hover { opacity: 0.85; }
+    .run-btn-pulse {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulseDot 2s ease-in-out infinite;
+    }
+    .chevron-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-soft);
+      background: var(--bg-2);
+      color: var(--fg-2);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.12s;
+    }
+    .chevron-btn:hover { background: var(--bg-3); }
+    .server-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      padding: 6px 10px;
+    }
+    .server-info {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--fg-2);
+    }
+    .server-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--add);
+      animation: pulseDot 2s ease-in-out infinite;
+    }
+    .server-link {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent);
+    }
+    .icon-btn-sm {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: var(--radius-sm);
+      border: none;
+      background: transparent;
+      color: var(--fg-3);
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .icon-btn-sm:hover { background: var(--bg-3); color: var(--fg-1); }
+
+    /* Changes section */
+    .changes-section {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px 6px;
+      position: sticky;
+      top: 0;
+      background: var(--bg-0);
+      z-index: 1;
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--fg-3);
+    }
+    .count-badge {
+      background: var(--bg-3);
+      color: var(--fg-2);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 100px;
+      border: 1px solid var(--line-soft);
+    }
+    .section-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .link-btn {
+      font-size: 11px;
+      color: var(--accent);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font-sans);
+      padding: 2px 4px;
+      border-radius: 4px;
+      transition: background 0.1s;
+    }
+    .link-btn:hover { background: var(--accent-soft); }
+    .subhead {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-3);
+      padding: 6px 12px 3px;
+    }
+    .file-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 12px;
+      cursor: pointer;
+      transition: background 0.1s;
+      min-height: 30px;
+    }
+    .file-row:hover { background: var(--bg-2); }
+    .file-checkbox {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      border: 1.5px solid var(--line);
+      background: transparent;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.1s, border-color 0.1s;
+    }
+    .file-checkbox.checked {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-fg);
+    }
+    .status-badge {
+      width: 16px;
+      height: 16px;
+      border-radius: 3px;
+      font-size: 9px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .status-M { background: oklch(0.78 0.14 80 / 0.18); color: var(--mod); }
+    .status-A { background: oklch(0.78 0.16 145 / 0.18); color: var(--add); }
+    .status-D { background: oklch(0.72 0.18 25 / 0.18); color: var(--del); }
+    .status-R { background: oklch(0.78 0.16 65 / 0.18); color: var(--warn); }
+    .file-path {
+      flex: 1;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-1);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-path .dir { color: var(--fg-3); }
+    .diff-stat {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      display: flex;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+    .diff-add { color: var(--add); }
+    .diff-del { color: var(--del); }
+    .clean-state {
+      padding: 20px 12px;
+      text-align: center;
+      color: var(--fg-3);
+      font-size: 12px;
+    }
+
+    /* Commit box */
+    .commit-box {
+      border-top: 1px solid var(--line-soft);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .commit-textarea {
+      width: 100%;
+      min-height: 62px;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      color: var(--fg-0);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      padding: 8px 10px;
+      resize: none;
+      outline: none;
+      transition: border-color 0.12s;
+      line-height: 1.5;
+    }
+    .commit-textarea:focus { border-color: var(--accent); }
+    .commit-textarea:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .commit-textarea::placeholder { color: var(--fg-3); }
+    .commit-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .branch-indicator {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--fg-3);
+    }
+    .commit-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: opacity 0.12s;
+      white-space: nowrap;
+    }
+    .commit-btn:hover:not(:disabled) { opacity: 0.85; }
+    .commit-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* Main area */
+    .main-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-0);
+    }
+    .tab-bar {
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--line-soft);
+      padding: 0 16px;
+      background: var(--bg-1);
+      flex-shrink: 0;
+      justify-content: space-between;
+    }
+    .tabs {
+      display: flex;
+      align-items: center;
+    }
+    .tab {
+      padding: 12px 14px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--fg-3);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.12s;
+      margin-bottom: -1px;
+    }
+    .tab:hover { color: var(--fg-1); }
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .connection-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 3px 9px;
+      border-radius: 100px;
+      background: oklch(0.78 0.16 145 / 0.1);
+      color: var(--add);
+      border: 1px solid oklch(0.78 0.16 145 / 0.2);
+    }
+    .connection-chip .dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulseDot 2s ease-in-out infinite;
+    }
+    .idle-chip {
+      background: var(--bg-3);
+      color: var(--fg-3);
+      border-color: var(--line-soft);
+    }
+    .idle-chip .dot {
+      background: currentColor;
+      animation: none;
+      opacity: 0.5;
+    }
+
+    /* Terminal placeholder */
+    .terminal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .agent-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid oklch(0.84 0.18 130 / 0.3);
+      border-radius: 100px;
+      padding: 3px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      margin-bottom: 20px;
+    }
+    .transcript-line {
+      margin-bottom: 12px;
+    }
+    .user-bubble {
+      display: inline-block;
+      background: var(--accent-soft);
+      border: 1px solid oklch(0.84 0.18 130 / 0.25);
+      color: var(--accent);
+      border-radius: var(--radius);
+      border-bottom-left-radius: 3px;
+      padding: 8px 12px;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      max-width: 480px;
+    }
+    .agent-think {
+      color: var(--fg-3);
+      font-style: italic;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 0;
+    }
+    .agent-text {
+      color: var(--fg-1);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    .tool-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin: 2px 0;
+    }
+    .tool-read {
+      background: oklch(0.78 0.14 80 / 0.12);
+      color: var(--mod);
+      border: 1px solid oklch(0.78 0.14 80 / 0.25);
+    }
+    .tool-write {
+      background: oklch(0.78 0.16 145 / 0.12);
+      color: var(--add);
+      border: 1px solid oklch(0.78 0.16 145 / 0.25);
+    }
+    .tool-run {
+      background: oklch(0.78 0.16 65 / 0.12);
+      color: var(--warn);
+      border: 1px solid oklch(0.78 0.16 65 / 0.25);
+    }
+    .done-line {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--add);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 500;
+      margin-top: 4px;
+    }
+    .cursor-blink {
+      display: inline-block;
+      width: 8px;
+      height: 14px;
+      background: var(--accent);
+      opacity: 0.7;
+      animation: blink 1s step-end infinite;
+      vertical-align: middle;
+      border-radius: 1px;
+      margin-left: 2px;
+    }
+
+    /* Terminal footer */
+    .terminal-footer {
+      border-top: 1px solid var(--line-soft);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-1);
+      flex-shrink: 0;
+    }
+    .shortcuts {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .shortcut-hint {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--fg-3);
+    }
+    .kbd {
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--fg-2);
+    }
+    .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11px;
+      color: var(--fg-3);
+    }
+    .footer-template {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .context-size {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-3);
+    }
+  `;
+
+  constructor() {
+    super();
+    this.project = null;
+    this._files = [];
+    this._running = false;
+    this._commitMsg = '';
+    this._activeTab = 'agent';
+    this._committing = false;
+    this._committed = false;
+    this._loading = true;
+  }
+
+  updated(changed) {
+    if (changed.has('project') && this.project) {
+      this._running = this.project.status === 'running';
+      this._loadChanges();
+    }
+  }
+
+  async _loadChanges() {
+    if (!this.project) return;
+    this._loading = true;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/changes`);
+      if (res.ok) {
+        this._files = await res.json();
+      }
+    } catch (e) {
+      console.error('Failed to load changes', e);
+    } finally {
+      this._loading = false;
+    }
+  }
+
+  _staged() { return this._files.filter(f => f.staged); }
+  _unstaged() { return this._files.filter(f => !f.staged); }
+
+  async _toggleStage(file) {
+    if (!this.project) return;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/changes/${file.id}/toggle`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        this._files = this._files.map(f => f.id === updated.id ? updated : f);
+      }
+    } catch (e) {
+      // Optimistic update on failure
+      this._files = this._files.map(f =>
+        f.id === file.id ? { ...f, staged: !f.staged } : f
+      );
+    }
+  }
+
+  async _stageAll() {
+    // Optimistically stage all
+    this._files = this._files.map(f => ({ ...f, staged: true }));
+  }
+
+  async _toggleRun() {
+    if (!this.project) return;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/run`, { method: 'POST' });
+      if (res.ok) {
+        const { status } = await res.json();
+        this._running = status === 'running';
+      }
+    } catch (e) {
+      this._running = !this._running;
+    }
+  }
+
+  async _commit() {
+    if (!this.project || !this._commitMsg.trim()) return;
+    const staged = this._staged();
+    if (staged.length === 0) return;
+    this._committing = true;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: this._commitMsg.trim(),
+          paths: staged.map(f => f.path),
+        }),
+      });
+      if (res.ok) {
+        this._files = this._files.filter(f => !f.staged);
+        this._commitMsg = '';
+        this._committed = true;
+        setTimeout(() => this._committed = false, 2500);
+      }
+    } finally {
+      this._committing = false;
+    }
+  }
+
+  _back() {
+    this.dispatchEvent(new CustomEvent('navigate-home', { bubbles: true, composed: true }));
+  }
+
+  _pathParts(path) {
+    const parts = path.split('/');
+    const filename = parts.pop();
+    const dir = parts.length > 0 ? parts.join('/') + '/' : '';
+    return { dir, filename };
+  }
+
+  _renderFileRow(file) {
+    const { dir, filename } = this._pathParts(file.path);
+    return html`
+      <div class="file-row" @click=${() => this._toggleStage(file)}>
+        <div class="file-checkbox ${file.staged ? 'checked' : ''}">
+          ${file.staged ? html`
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m5 12 5 5L20 7"/>
+            </svg>
+          ` : ''}
+        </div>
+        <span class="status-badge status-${file.status}">${file.status}</span>
+        <span class="file-path">
+          <span class="dir">${dir}</span>${filename}
+        </span>
+        <span class="diff-stat">
+          ${file.additions > 0 ? html`<span class="diff-add">+${file.additions}</span>` : ''}
+          ${file.deletions > 0 ? html`<span class="diff-del">-${file.deletions}</span>` : ''}
+        </span>
+      </div>
+    `;
+  }
+
+  _renderSidebar() {
+    const staged = this._staged();
+    const unstaged = this._unstaged();
+    const allFiles = [...staged, ...unstaged];
+    const branch = this.project?.branch || 'main';
+
+    return html`
+      <div class="sidebar">
+        <div class="sidebar-top">
+          <div class="run-row">
+            <button class="run-btn ${this._running ? 'running' : 'idle'}" @click=${this._toggleRun}>
+              ${this._running
+                ? html`<span class="run-btn-pulse"></span>Stop`
+                : html`${iconPlay} Run`
+              }
+            </button>
+            <button class="chevron-btn">${iconChevronDown}</button>
+          </div>
+          ${this._running ? html`
+            <div class="server-bar">
+              <div class="server-info">
+                <span class="server-dot"></span>
+                <span>dev server</span>
+                <span>·</span>
+                <span class="server-link">localhost:3000</span>
+              </div>
+              <button class="icon-btn-sm" title="Open in browser">${iconExternal}</button>
+            </div>
+          ` : ''}
+        </div>
+
+        <div class="changes-section">
+          <div class="section-header">
+            <div class="section-title">
+              Changes
+              <span class="count-badge">${allFiles.length}</span>
+            </div>
+            <div class="section-actions">
+              <button class="link-btn" @click=${this._stageAll}>Stage all</button>
+              <button class="icon-btn-sm" title="Refresh" @click=${this._loadChanges}>${iconRefresh}</button>
+            </div>
+          </div>
+
+          ${allFiles.length === 0 ? html`
+            <div class="clean-state">
+              ${this._committed ? html`
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--add)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;margin-bottom:4px;vertical-align:middle">
+                  <path d="m5 12 5 5L20 7"/>
+                </svg>
+                Committed successfully
+              ` : 'Working tree clean'}
+            </div>
+          ` : html`
+            ${staged.length > 0 ? html`
+              <div class="subhead">Staged</div>
+              ${staged.map(f => this._renderFileRow(f))}
+            ` : ''}
+            ${unstaged.length > 0 ? html`
+              <div class="subhead">Unstaged</div>
+              ${unstaged.map(f => this._renderFileRow(f))}
+            ` : ''}
+          `}
+        </div>
+
+        <div class="commit-box">
+          <textarea
+            class="commit-textarea"
+            placeholder="${staged.length > 0 ? 'Commit message…' : 'Stage files to commit'}"
+            .value=${this._commitMsg}
+            @input=${e => this._commitMsg = e.target.value}
+            ?disabled=${staged.length === 0}
+          ></textarea>
+          <div class="commit-row">
+            <div class="branch-indicator">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
+                <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
+              </svg>
+              ${branch}
+            </div>
+            <button
+              class="commit-btn"
+              ?disabled=${staged.length === 0 || !this._commitMsg.trim() || this._committing}
+              @click=${this._commit}
+            >
+              ${this._committing ? 'Committing…' : `Commit ${staged.length > 0 ? staged.length : ''}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderTerminalPlaceholder() {
+    return html`
+      <div class="terminal-body">
+        <div class="agent-tag">
+          ${iconSparkle}
+          claude agent · claude-sonnet-4-5
+        </div>
+
+        <div class="transcript-line">
+          <div class="user-bubble">add a copy as markdown link command</div>
+        </div>
+
+        <div class="transcript-line">
+          <div class="agent-think">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            Reading Toolbar.tsx…
+          </div>
+        </div>
+
+        <div class="transcript-line">
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <span class="tool-badge tool-read">read · src/editor/Toolbar.tsx</span>
+          </div>
+        </div>
+
+        <div class="transcript-line">
+          <div class="agent-text">
+            I'll add a "Copy as Markdown link" command to the toolbar. This will copy the current selection as a formatted Markdown link to the clipboard.<br/><br/>
+            Let me update <code style="font-family:var(--font-mono);font-size:12px;background:var(--bg-3);padding:1px 5px;border-radius:3px">Toolbar.tsx</code> and create the <code style="font-family:var(--font-mono);font-size:12px;background:var(--bg-3);padding:1px 5px;border-radius:3px">insertLink.ts</code> command file.
+          </div>
+        </div>
+
+        <div class="transcript-line">
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <span class="tool-badge tool-write">write · src/editor/Toolbar.tsx</span>
+            <span class="tool-badge tool-write">write · src/editor/commands/insertLink.ts</span>
+          </div>
+        </div>
+
+        <div class="transcript-line">
+          <div class="done-line">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m5 12 5 5L20 7"/>
+            </svg>
+            Done — 2 files updated, command added to toolbar
+          </div>
+        </div>
+
+        <div class="transcript-line">
+          <span class="cursor-blink"></span>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderLogsPlaceholder() {
+    return html`
+      <div class="terminal-body" style="color:var(--fg-3)">
+        <div style="font-family:var(--font-mono);font-size:12px;line-height:1.8">
+          <div><span style="color:var(--fg-3)">12:41:03</span> <span style="color:var(--add)">info</span>  Server started on port 3000</div>
+          <div><span style="color:var(--fg-3)">12:41:03</span> <span style="color:var(--add)">info</span>  Watching for changes…</div>
+          <div><span style="color:var(--fg-3)">12:41:47</span> <span style="color:var(--mod)">reload</span> src/editor/Toolbar.tsx</div>
+          <div><span style="color:var(--fg-3)">12:41:47</span> <span style="color:var(--mod)">reload</span> src/editor/commands/insertLink.ts</div>
+          <span class="cursor-blink"></span>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderShellPlaceholder() {
+    return html`
+      <div class="terminal-body" style="font-family:var(--font-mono);font-size:13px">
+        <div style="color:var(--fg-2)"><span style="color:var(--accent)">❯</span> npm run dev</div>
+        <div style="color:var(--fg-3)">  VITE v5.0.0  ready in 340 ms</div>
+        <div style="color:var(--fg-3)">  ➜  Local:   <span style="color:var(--accent)">http://localhost:3000/</span></div>
+        <div style="margin-top:12px;color:var(--fg-2)"><span style="color:var(--accent)">❯</span> <span class="cursor-blink"></span></div>
+      </div>
+    `;
+  }
+
+  render() {
+    if (!this.project) return html`<div style="padding:40px;color:var(--fg-3)">Loading…</div>`;
+
+    return html`
+      <loop-top-bar>
+        <div slot="breadcrumb">
+          <button
+            style="background:none;border:none;color:var(--fg-3);cursor:pointer;font-size:13px;font-family:var(--font-sans);display:flex;align-items:center;gap:5px;padding:0;transition:color 0.12s"
+            @click=${this._back}
+          >
+            ${iconArrowLeft}
+            Projects
+          </button>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--fg-3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m9 6 6 6-6 6"/>
+          </svg>
+          <span style="color:var(--fg-1);font-size:13px;font-weight:500">${this.project.name}</span>
+          <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-family:var(--font-mono);color:var(--fg-2);background:var(--bg-3);border:1px solid var(--line-soft);border-radius:100px;padding:1px 8px;margin-left:6px">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
+              <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
+            </svg>
+            ${this.project.branch}
+          </span>
+        </div>
+      </loop-top-bar>
+
+      <div class="layout">
+        ${this._renderSidebar()}
+
+        <div class="main-area">
+          <div class="tab-bar">
+            <div class="tabs">
+              ${['agent', 'logs', 'shell'].map(tab => html`
+                <div
+                  class="tab ${this._activeTab === tab ? 'active' : ''}"
+                  @click=${() => this._activeTab = tab}
+                >
+                  ${tab}
+                </div>
+              `)}
+            </div>
+            <div class="${this._running ? 'connection-chip' : 'connection-chip idle-chip'}">
+              <span class="dot"></span>
+              ${this._running ? 'connected' : 'idle'}
+            </div>
+          </div>
+
+          ${this._activeTab === 'agent' ? this._renderTerminalPlaceholder() : ''}
+          ${this._activeTab === 'logs' ? this._renderLogsPlaceholder() : ''}
+          ${this._activeTab === 'shell' ? this._renderShellPlaceholder() : ''}
+
+          <div class="terminal-footer">
+            <div class="shortcuts">
+              <span class="shortcut-hint"><span class="kbd">⌘ ↵</span> send</span>
+              <span class="shortcut-hint"><span class="kbd">⌘ K</span> clear</span>
+              <span class="shortcut-hint"><span class="kbd">⌘ .</span> interrupt</span>
+            </div>
+            <div class="footer-right">
+              <span class="footer-template">
+                ${iconSparkle}
+                ${this.project.template || 'blank'}
+              </span>
+              <span class="context-size">~12k tokens</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+}
+
+customElements.define('loop-project-screen', LoopProjectScreen);
