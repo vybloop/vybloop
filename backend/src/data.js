@@ -1,3 +1,11 @@
+import { readFileSync, writeFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const DB_PATH = join(__dirname, '../../data/projects.json');
+
 export const TEMPLATES = [
   { id: 'blank', name: 'Blank workspace' },
   { id: 'nextjs-tailwind', name: 'Next.js + Tailwind' },
@@ -61,82 +69,29 @@ const SAMPLE_CHANGES = [
   },
 ];
 
-let projects = [
-  {
-    id: 'quill',
-    name: 'quill',
-    repo: 'github.com/user/quill',
-    description: 'Rich text editor with markdown support',
-    status: 'running',
-    branch: 'main',
-    template: 'vite-react',
-    changes: 4,
-    lastActivity: '2 min ago',
-  },
-  {
-    id: 'fern-dashboard',
-    name: 'fern-dashboard',
-    repo: 'github.com/user/fern-dashboard',
-    description: 'Analytics dashboard with chart components',
-    status: 'idle',
-    branch: 'feat/charts-v2',
-    template: 'nextjs-tailwind',
-    changes: 12,
-    lastActivity: '1 hr ago',
-  },
-  {
-    id: 'tessera',
-    name: 'tessera',
-    repo: 'github.com/user/tessera',
-    description: 'Mosaic UI component library',
-    status: 'idle',
-    branch: 'main',
-    template: 'vite-react',
-    changes: 0,
-    lastActivity: '3 hrs ago',
-  },
-  {
-    id: 'loom-cli',
-    name: 'loom-cli',
-    repo: 'github.com/user/loom-cli',
-    description: 'Command-line tool for weaving data pipelines',
-    status: 'error',
-    branch: 'release/0.4',
-    template: 'rust-cli',
-    changes: 2,
-    lastActivity: '5 hrs ago',
-  },
-  {
-    id: 'figment',
-    name: 'figment',
-    repo: 'github.com/user/figment',
-    description: 'Design token management tool',
-    status: 'idle',
-    branch: 'main',
-    template: 'sveltekit',
-    changes: 0,
-    lastActivity: 'yesterday',
-  },
-  {
-    id: 'koi-pond',
-    name: 'koi-pond',
-    repo: 'github.com/user/koi-pond',
-    description: 'Generative art canvas experiments',
-    status: 'idle',
-    branch: 'main',
-    template: 'blank',
-    changes: 0,
-    lastActivity: '2 days ago',
-  },
-];
+function load() {
+  const raw = readFileSync(DB_PATH, 'utf8');
+  return JSON.parse(raw);
+}
 
-// Per-project changes store
+function save(db) {
+  writeFileSync(DB_PATH, JSON.stringify(db, null, 2) + '\n', 'utf8');
+}
+
+const db = load();
+let { projects, nextId } = db;
+
+// Per-project changes — runtime only, not persisted
 const projectChanges = {};
 for (const p of projects) {
   projectChanges[p.id] = JSON.parse(JSON.stringify(SAMPLE_CHANGES));
 }
 
-let nextId = 100;
+function persist() {
+  db.projects = projects;
+  db.nextId = nextId;
+  save(db);
+}
 
 export function getProjects() {
   return projects.map(p => ({
@@ -161,12 +116,12 @@ export function createProject(data) {
     status: 'idle',
     branch: data.branch || 'main',
     template: data.template || 'blank',
-    changes: 0,
-    lastActivity: 'just now',
+    lastActivity: new Date().toISOString(),
   };
   projects.push(project);
   projectChanges[id] = [];
-  return project;
+  persist();
+  return { ...project, changes: 0 };
 }
 
 export function getChanges(id) {
@@ -179,6 +134,8 @@ export function commitChanges(id, { message, paths }) {
   const changes = projectChanges[id] || [];
   const pathSet = new Set(paths);
   projectChanges[id] = changes.filter(f => !pathSet.has(f.path));
+  project.lastActivity = new Date().toISOString();
+  persist();
   return { ok: true, branch: project.branch };
 }
 
@@ -186,6 +143,7 @@ export function toggleRun(id) {
   const project = projects.find(p => p.id === id);
   if (!project) return null;
   project.status = project.status === 'running' ? 'idle' : 'running';
+  persist();
   return { status: project.status };
 }
 

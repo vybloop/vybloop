@@ -4,3 +4,5 @@ services:
     ports:
       - "9876:3000"
     restart: unless-stopped
+    volumes:
+      - ./data:/data

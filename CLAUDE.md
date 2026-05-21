@@ -53,3 +53,52 @@ The HTTP server is created explicitly (`http.createServer(app)`) so the WebSocke
 Vite project. `src/main.js` opens an xterm.js terminal, connects to `ws://host/terminal`, uses `FitAddon` + `ResizeObserver` to keep the terminal sized to its container, and sends resize events to the backend.
 
 The built output lands in `podman-web/frontend/dist/` and is copied to `server/public/` inside the Docker image. The `server/public/index.html` file is a legacy artifact that gets overwritten by the Vite build in Docker.
+
+## Loop App (backend/ + frontend/)
+
+A separate project management UI lives in `backend/` (Express) and `frontend/` (Vite + Lit). Run it with:
+
+```bash
+cd backend && npm install && node src/server.js
+# In another terminal:
+cd frontend && npm install && npm run dev
+```
+
+### Data file — `data/projects.json`
+
+Single JSON file that backs the project list. Edited directly by `backend/src/data.js` on every mutating API call.
+
+```jsonc
+{
+  "nextId": 100,          // auto-increment counter for new project IDs
+  "projects": [
+    {
+      "id": "quill",            // URL-safe slug, unique
+      "name": "quill",          // display name
+      "repo": "github.com/...", // repository URL (free-form string)
+      "description": "...",     // short description
+      "status": "idle",         // "idle" | "running" | "error"
+      "branch": "main",         // current git branch
+      "template": "vite-react", // template ID (see TEMPLATES in data.js)
+      "lastActivity": "2026-05-20T13:58:00Z" // ISO 8601 UTC, updated on mutations; frontend formats as relative time
+    }
+  ]
+}
+```
+
+`changes` (file count) is runtime-only and not stored in the JSON. New projects created via the API get an ID of `<slugified-name>-<nextId>`.
+
+### API reference — `backend/src/server.js` (port 3000)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/projects` | List all projects. Each object includes a `changes` count. |
+| `POST` | `/api/projects` | Create a project. Body: `{ name*, repo, branch, template }`. Returns 201 + new project. |
+| `GET` | `/api/projects/:id` | Get a single project by ID. |
+| `GET` | `/api/projects/:id/changes` | List pending file changes for a project. |
+| `POST` | `/api/projects/:id/commit` | Commit staged changes. Body: `{ message, paths: string[] }`. |
+| `POST` | `/api/projects/:id/run` | Toggle `status` between `running` and `idle`. |
+| `POST` | `/api/projects/:id/changes/:fileId/toggle` | Toggle staged/unstaged for a file. |
+| `GET` | `/api/templates` | List available project templates. |
+
+All endpoints return JSON. Errors return `{ "error": "..." }` with an appropriate HTTP status code.

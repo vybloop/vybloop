@@ -390,6 +390,18 @@ class LoopHomeScreen extends LitElement {
     return name.slice(0, 2).toUpperCase();
   }
 
+  _relativeTime(iso) {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`;
+    const days = Math.floor(hrs / 24);
+    if (days === 1) return 'yesterday';
+    return `${days} days ago`;
+  }
+
   _navigateNew() {
     this.dispatchEvent(new CustomEvent('navigate-new', { bubbles: true, composed: true }));
   }
@@ -434,7 +446,7 @@ class LoopHomeScreen extends LitElement {
             ${p.branch}
           </span>
           ${p.changes > 0 ? html`<span class="changes-badge">${p.changes} changes</span>` : ''}
-          <span class="last-activity">${p.lastActivity}</span>
+          <span class="last-activity">${this._relativeTime(p.lastActivity)}</span>
         </div>
       </div>
     `;
@@ -484,7 +496,7 @@ class LoopHomeScreen extends LitElement {
               </td>
               <td>${this._renderStatusPill(p.status)}</td>
               <td>${p.changes > 0 ? html`<span class="changes-badge">${p.changes} changes</span>` : html`<span style="color:var(--fg-3)">—</span>`}</td>
-              <td style="color:var(--fg-3)">${p.lastActivity}</td>
+              <td style="color:var(--fg-3)">${this._relativeTime(p.lastActivity)}</td>
             </tr>
           `)}
         </tbody>
