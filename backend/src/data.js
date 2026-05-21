@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -79,7 +80,15 @@ function save(db) {
 }
 
 const db = load();
-let { projects, nextId } = db;
+// Strip status from persisted records — status is runtime-only
+let projects = db.projects.map(({ status, ...p }) => p);
+let nextId = db.nextId;
+
+// Runtime-only status map — not persisted
+const projectStatus = {};
+for (const p of projects) {
+  projectStatus[p.id] = 'idle';
+}
 
 // Per-project changes — runtime only, not persisted
 const projectChanges = {};
@@ -93,9 +102,42 @@ function persist() {
   save(db);
 }
 
+function injectGithubToken(repoUrl) {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return repoUrl;
+  try {
+    const u = new URL(repoUrl);
+    if (u.hostname === 'github.com' && u.protocol === 'https:') {
+      u.username = token;
+      return u.toString();
+    }
+  } catch {}
+  return repoUrl;
+}
+
+export function cloneRepo(id, repoUrl) {
+  const cloneUrl = injectGithubToken(repoUrl);
+  const destDir = `/data/${id}/git`;
+  mkdirSync(`/data/${id}`, { recursive: true });
+  projectStatus[id] = 'cloning';
+
+  const proc = spawn('git', ['clone', cloneUrl, destDir]);
+  proc.on('close', (code) => {
+    projectStatus[id] = code === 0 ? 'idle' : 'error';
+    if (code === 0) {
+      const project = projects.find(p => p.id === id);
+      if (project) {
+        project.lastActivity = new Date().toISOString();
+        persist();
+      }
+    }
+  });
+}
+
 export function getProjects() {
   return projects.map(p => ({
     ...p,
+    status: projectStatus[p.id] ?? 'idle',
     changes: (projectChanges[p.id] || []).length,
   }));
 }
@@ -103,7 +145,11 @@ export function getProjects() {
 export function getProject(id) {
   const p = projects.find(p => p.id === id);
   if (!p) return null;
-  return { ...p, changes: (projectChanges[p.id] || []).length };
+  return {
+    ...p,
+    status: projectStatus[p.id] ?? 'idle',
+    changes: (projectChanges[p.id] || []).length,
+  };
 }
 
 export function createProject(data) {
@@ -113,15 +159,15 @@ export function createProject(data) {
     name: data.name,
     repo: data.repo || '',
     description: '',
-    status: 'idle',
     branch: data.branch || 'main',
     template: data.template || 'blank',
     lastActivity: new Date().toISOString(),
   };
   projects.push(project);
+  projectStatus[id] = 'idle';
   projectChanges[id] = [];
   persist();
-  return { ...project, changes: 0 };
+  return { ...project, status: 'idle', changes: 0 };
 }
 
 export function getChanges(id) {
@@ -142,9 +188,9 @@ export function commitChanges(id, { message, paths }) {
 export function toggleRun(id) {
   const project = projects.find(p => p.id === id);
   if (!project) return null;
-  project.status = project.status === 'running' ? 'idle' : 'running';
-  persist();
-  return { status: project.status };
+  const current = projectStatus[id] ?? 'idle';
+  projectStatus[id] = current === 'running' ? 'idle' : 'running';
+  return { status: projectStatus[id] };
 }
 
 export function toggleStage(id, fileId) {

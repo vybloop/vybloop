@@ -6,6 +6,7 @@ import {
   getProjects,
   getProject,
   createProject,
+  cloneRepo,
   getChanges,
   commitChanges,
   toggleRun,
@@ -32,6 +33,7 @@ app.post('/api/projects', (req, res) => {
   const { name, repo, branch, template } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   const project = createProject({ name, repo, branch, template });
+  if (repo) cloneRepo(project.id, repo);
   res.status(201).json(project);
 });
 
