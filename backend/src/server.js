@@ -14,6 +14,7 @@ import {
   commitChanges,
   toggleRun,
   toggleStage,
+  stageAll,
   TEMPLATES,
 } from './data.js';
 
@@ -28,8 +29,8 @@ app.use(express.json());
 app.use(express.static(join(__dirname, '../public')));
 
 // API routes
-app.get('/api/projects', (req, res) => {
-  res.json(getProjects());
+app.get('/api/projects', async (req, res) => {
+  res.json(await getProjects());
 });
 
 app.post('/api/projects', (req, res) => {
@@ -40,37 +41,45 @@ app.post('/api/projects', (req, res) => {
   res.status(201).json(project);
 });
 
-app.get('/api/projects/:id', (req, res) => {
-  const project = getProject(req.params.id);
+app.get('/api/projects/:id', async (req, res) => {
+  const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
   res.json(project);
 });
 
-app.get('/api/projects/:id/changes', (req, res) => {
-  const project = getProject(req.params.id);
-  if (!project) return res.status(404).json({ error: 'not found' });
-  res.json(getChanges(req.params.id));
+app.get('/api/projects/:id/changes', async (req, res) => {
+  const changes = await getChanges(req.params.id);
+  if (changes === null) return res.status(404).json({ error: 'not found' });
+  res.json(changes);
 });
 
-app.post('/api/projects/:id/commit', (req, res) => {
-  const project = getProject(req.params.id);
+app.post('/api/projects/:id/commit', async (req, res) => {
+  const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
-  const { message, paths } = req.body;
-  const result = commitChanges(req.params.id, { message, paths: paths || [] });
+  const { message } = req.body;
+  if (!message || !message.trim()) return res.status(400).json({ error: 'message is required' });
+  const result = await commitChanges(req.params.id, { message });
   res.json(result);
 });
 
-app.post('/api/projects/:id/run', (req, res) => {
-  const project = getProject(req.params.id);
+app.post('/api/projects/:id/run', async (req, res) => {
+  const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
   const result = toggleRun(req.params.id);
   res.json(result);
 });
 
-app.post('/api/projects/:id/changes/:fileId/toggle', (req, res) => {
-  const project = getProject(req.params.id);
+app.post('/api/projects/:id/changes/stage-all', async (req, res) => {
+  const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
-  const result = toggleStage(req.params.id, req.params.fileId);
+  const files = await stageAll(req.params.id);
+  res.json(files);
+});
+
+app.post('/api/projects/:id/changes/:fileId/toggle', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const result = await toggleStage(req.params.id, req.params.fileId);
   if (!result) return res.status(404).json({ error: 'file not found' });
   res.json(result);
 });
@@ -100,8 +109,8 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
-wss.on('connection', (ws, req, projectId) => {
-  const project = getProject(projectId);
+wss.on('connection', async (ws, req, projectId) => {
+  const project = await getProject(projectId);
   if (!project) {
     ws.close(1008, 'project not found');
     return;

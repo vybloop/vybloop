@@ -719,8 +719,12 @@ class LoopProjectScreen extends LitElement {
   }
 
   async _stageAll() {
-    // Optimistically stage all
-    this._files = this._files.map(f => ({ ...f, staged: true }));
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/changes/stage-all`, { method: 'POST' });
+      if (res.ok) this._files = await res.json();
+    } catch (e) {
+      console.error('Failed to stage all', e);
+    }
   }
 
   async _toggleRun() {
