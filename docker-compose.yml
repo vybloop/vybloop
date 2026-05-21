@@ -1,11 +1,20 @@
 services:
   loop:
     build: .
+    privileged: true
     ports:
       - "9876:3000"
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
+    environment:
+      - ANTHROPIC_API_KEY
     volumes:
       - ./data:/data
+      - podman_storage:/home/poduser/.local/share/containers
+      - claude_config:/claudeconfig
+
+volumes:
+  podman_storage:
+  claude_config:

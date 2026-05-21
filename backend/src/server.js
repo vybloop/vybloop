@@ -1,7 +1,10 @@
 import express from 'express';
 import cors from 'cors';
+import { createServer } from 'http';
+import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import * as pty from 'node-pty';
 import {
   getProjects,
   getProject,
@@ -81,7 +84,103 @@ app.get('*', (req, res) => {
   res.sendFile(join(__dirname, '../public/index.html'));
 });
 
+// Per-project terminal sessions: Map<projectId, { pty, clients: Set<WebSocket>, scrollback: Buffer[] }>
+const sessions = new Map();
+const SCROLLBACK_LIMIT = 500;
+
+const server = createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (req, socket, head) => {
+  const match = req.url.match(/^\/api\/projects\/([^/]+)\/terminal$/);
+  if (match) {
+    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req, match[1]));
+  } else {
+    socket.destroy();
+  }
+});
+
+wss.on('connection', (ws, req, projectId) => {
+  const project = getProject(projectId);
+  if (!project) {
+    ws.close(1008, 'project not found');
+    return;
+  }
+
+  if (sessions.has(projectId)) {
+    // Reconnect to existing session: replay scrollback then attach
+    const session = sessions.get(projectId);
+    for (const chunk of session.scrollback) {
+      ws.send(chunk);
+    }
+    session.clients.add(ws);
+    // Resize the PTY to this client's terminal size if it sends one
+    ws.on('message', msg => handleInput(session.pty, msg));
+    ws.on('close', () => session.clients.delete(ws));
+    return;
+  }
+
+  // Spawn a new container for this project
+  const repoPath = `/data/${projectId}/git`;
+  const shell = pty.spawn('podman', [
+    'run', '--rm', '-it',
+    '-v', `${repoPath}:/project`,
+    '-v', '/claudeconfig:/claudeconfig',
+    '--env', 'CLAUDE_CONFIG_DIR=/claudeconfig',
+    '--env', 'ANTHROPIC_API_KEY',
+    '--env', 'IS_SANDBOX=1',
+    '--env', 'COLORTERM=truecolor',
+    '-w', '/project',
+    'claude-inner',
+    'claude', '--dangerously-skip-permissions',
+  ], {
+    name: 'xterm-256color',
+    cols: 80,
+    rows: 24,
+    cwd: process.env.HOME || '/home/poduser',
+    env: process.env,
+  });
+
+  const session = { pty: shell, clients: new Set([ws]), scrollback: [] };
+  sessions.set(projectId, session);
+
+  shell.onData(data => {
+    const buf = Buffer.from(data);
+    session.scrollback.push(buf);
+    if (session.scrollback.length > SCROLLBACK_LIMIT) session.scrollback.shift();
+    for (const client of session.clients) {
+      if (client.readyState === 1) client.send(buf);
+    }
+  });
+
+  shell.onExit(() => {
+    sessions.delete(projectId);
+    for (const client of session.clients) {
+      if (client.readyState === 1) {
+        client.send(Buffer.from('\r\n\x1b[31m[Session ended]\x1b[0m\r\n'));
+        client.close();
+      }
+    }
+  });
+
+  ws.on('message', msg => handleInput(shell, msg));
+  ws.on('close', () => session.clients.delete(ws));
+});
+
+function handleInput(shell, msg) {
+  try {
+    const obj = JSON.parse(msg);
+    if (obj.type === 'input') {
+      shell.write(obj.data);
+    } else if (obj.type === 'resize') {
+      shell.resize(obj.cols, obj.rows);
+    }
+  } catch {
+    shell.write(msg.toString());
+  }
+}
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Loop server running on port ${PORT}`);
 });

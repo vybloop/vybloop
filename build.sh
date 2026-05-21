@@ -9,8 +9,11 @@ docker build -t podman-base "$SCRIPT_DIR/podman"
 echo "==> Building podman-web image..."
 docker build -t podman-web "$SCRIPT_DIR/podman-web"
 
+echo "==> Building main app image..."
+docker compose -f "$SCRIPT_DIR/docker-compose.yml" build
+
 echo ""
 echo "Done. To start the server:"
-echo "  docker compose -f podman-web/docker-compose.yml up"
+echo "  docker compose up"
 echo ""
 echo "Then open http://localhost:9876"

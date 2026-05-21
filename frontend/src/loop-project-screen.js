@@ -1,10 +1,13 @@
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, unsafeCSS } from 'lit';
 import './loop-top-bar.js';
 import {
   iconArrowLeft, iconPlay, iconStop, iconChevronDown, iconRefresh,
   iconExternal, iconTerminal, iconSparkle, iconCopy, iconCheck,
   iconBranch, iconChevron
 } from './icons.js';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 
 class LoopProjectScreen extends LitElement {
   static properties = {
@@ -18,7 +21,7 @@ class LoopProjectScreen extends LitElement {
     _loading: { state: true },
   };
 
-  static styles = css`
+  static styles = [css`
     :host {
       display: flex;
       flex-direction: column;
@@ -551,7 +554,16 @@ class LoopProjectScreen extends LitElement {
       font-size: 11px;
       color: var(--fg-3);
     }
-  `;
+    #xterm-container {
+      flex: 1;
+      min-height: 0;
+    }
+    #xterm-container .xterm,
+    #xterm-container .xterm-viewport,
+    #xterm-container .xterm-screen {
+      height: 100% !important;
+    }
+  `, unsafeCSS(xtermCss)];
 
   constructor() {
     super();
@@ -563,13 +575,96 @@ class LoopProjectScreen extends LitElement {
     this._committing = false;
     this._committed = false;
     this._loading = true;
+    this._term = null;
+    this._termFit = null;
+    this._termWs = null;
+  }
+
+  firstUpdated() {
+    this._initTerminal();
   }
 
   updated(changed) {
     if (changed.has('project') && this.project) {
       this._running = this.project.status === 'running';
       this._loadChanges();
+      // Connect the terminal once the project arrives (terminal is already initialized)
+      if (this._term && !this._termWs) this._connectWs();
     }
+    if (changed.has('_activeTab') && this._activeTab === 'agent') {
+      // Refit the terminal when switching back to the agent tab
+      requestAnimationFrame(() => this._termFit?.fit());
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._termDataDisposable?.dispose();
+    this._termResizeDisposable?.dispose();
+    this._termWs?.close();
+    this._term?.dispose();
+    this._term = null;
+    this._termFit = null;
+    this._termWs = null;
+  }
+
+  _initTerminal() {
+    const el = this.shadowRoot.querySelector('#xterm-container');
+    if (!el) return;
+    this._term = new Terminal({
+      cursorBlink: true,
+      scrollback: 5000,
+      fontFamily: 'Menlo, Consolas, "Courier New", monospace',
+      fontSize: 13,
+    });
+    this._termFit = new FitAddon();
+    this._term.loadAddon(this._termFit);
+    this._term.open(el);
+    this._termFit.fit();
+    new ResizeObserver(() => this._termFit?.fit()).observe(el);
+    this._connectWs();
+  }
+
+  _connectWs() {
+    if (!this.project) return;
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/api/projects/${this.project.id}/terminal`);
+    ws.binaryType = 'arraybuffer';
+    this._termWs = ws;
+
+    ws.onopen = () => {
+      const { cols, rows } = this._term;
+      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    };
+
+    ws.onmessage = ({ data }) => {
+      if (data instanceof ArrayBuffer) {
+        this._term.write(new Uint8Array(data));
+      } else {
+        this._term.write(data);
+      }
+    };
+
+    ws.onclose = () => {
+      this._termWs = null;
+      this._term?.write('\r\n\x1b[31m[Disconnected — reconnecting…]\x1b[0m\r\n');
+      setTimeout(() => { if (this._term) this._connectWs(); }, 3000);
+    };
+
+    this._termDataDisposable?.dispose();
+    this._termResizeDisposable?.dispose();
+
+    this._termDataDisposable = this._term.onData(data => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', data }));
+      }
+    });
+
+    this._termResizeDisposable = this._term.onResize(({ cols, rows }) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      }
+    });
   }
 
   async _loadChanges() {
@@ -908,7 +1003,9 @@ class LoopProjectScreen extends LitElement {
             </div>
           </div>
 
-          ${this._activeTab === 'agent' ? this._renderTerminalPlaceholder() : ''}
+          <div class="terminal-body" style="display:${this._activeTab === 'agent' ? 'flex' : 'none'};padding:0;overflow:hidden">
+            <div id="xterm-container"></div>
+          </div>
           ${this._activeTab === 'logs' ? this._renderLogsPlaceholder() : ''}
           ${this._activeTab === 'shell' ? this._renderShellPlaceholder() : ''}
 
