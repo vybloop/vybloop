@@ -70,12 +70,21 @@ const SAMPLE_CHANGES = [
   },
 ];
 
+const DEFAULT_DB = { nextId: 1, projects: [] };
+
 function load() {
-  const raw = readFileSync(DB_PATH, 'utf8');
-  return JSON.parse(raw);
+  try {
+    const raw = readFileSync(DB_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_DB };
+    return { nextId: parsed.nextId ?? 1, projects: parsed.projects ?? [] };
+  } catch {
+    return { ...DEFAULT_DB };
+  }
 }
 
 function save(db) {
+  mkdirSync(dirname(DB_PATH), { recursive: true });
   writeFileSync(DB_PATH, JSON.stringify(db, null, 2) + '\n', 'utf8');
 }
 
