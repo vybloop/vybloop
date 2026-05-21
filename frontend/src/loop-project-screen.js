@@ -614,7 +614,7 @@ class LoopProjectScreen extends LitElement {
     this._term = new Terminal({
       cursorBlink: true,
       scrollback: 5000,
-      fontFamily: 'Menlo, Consolas, "Courier New", monospace',
+      fontFamily: '"Cascadia Code", ui-monospace, monospace',
       fontSize: 13,
     });
     this._termFit = new FitAddon();
@@ -622,6 +622,21 @@ class LoopProjectScreen extends LitElement {
     this._term.open(el);
     this._termFit.fit();
     new ResizeObserver(() => this._termFit?.fit()).observe(el);
+
+    this._term.attachCustomKeyEventHandler((e) => {
+      // ctrl+c with selection: copy to clipboard instead of sending ^C
+      if (e.type === 'keydown' && e.ctrlKey && e.key === 'c' && this._term.hasSelection()) {
+        navigator.clipboard.writeText(this._term.getSelection()).catch(() => {});
+        return false;
+      }
+      // ctrl+v: read from clipboard and paste into terminal
+      if (e.type === 'keydown' && e.ctrlKey && e.key === 'v') {
+        navigator.clipboard.readText().then(text => this._term.paste(text)).catch(() => {});
+        return false;
+      }
+      return true;
+    });
+
     this._connectWs();
   }
 
