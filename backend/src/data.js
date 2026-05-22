@@ -135,9 +135,8 @@ function runGit(cwd, args) {
       resolve('');
       return;
     }
-    console.log(`[git] ${args.join(' ')} (cwd: ${cwd})`);
     execFile('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) console.log(`[git] exit ${err.code}: ${stderr?.trim()}`);
+      if (err) console.log(`[git] ${args[0]} exit ${err.code}: ${stderr?.trim()}`);
       resolve(stdout || '');
     });
   });

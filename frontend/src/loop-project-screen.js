@@ -1323,6 +1323,7 @@ class LoopProjectScreen extends LitElement {
         this._fileCleanVersions.set(path, model.getAlternativeVersionId());
         this._openFiles = this._openFiles.map(f => f.path === path ? { ...f, dirty: false } : f);
         this._dialog = null;
+        this._loadChanges();
       }
     } catch (e) {
       console.error('Failed to save file', e);
