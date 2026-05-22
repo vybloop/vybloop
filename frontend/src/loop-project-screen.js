@@ -1973,7 +1973,7 @@ class LoopProjectScreen extends LitElement {
                   class="tab ${this._activeTab === tab ? 'active' : ''}"
                   @click=${() => this._activeTab = tab}
                 >
-                  ${tab}${tab === 'changes' && changeCount > 0 ? html` <span class="count-badge">${changeCount}</span>` : ''}
+                  ${tab === 'changes' ? 'project' : tab}${tab === 'changes' && changeCount > 0 ? html` <span class="count-badge">${changeCount}</span>` : ''}
                 </div>
               `)}
               ${this._openFiles.map(({ path, dirty }) => {
