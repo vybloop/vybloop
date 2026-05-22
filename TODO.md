@@ -1,9 +1,8 @@
 After completing a task, delete it from this file.
 
-* Mobile browsers (both firefox and chrome) don't seem to be using the right font in the terminal. Or at least some of the extended characters don't seem to be rendering, so I assume it's a typeface issue. Maybe look for a different way to load the font that's more likely to work on mobile.
-
-
 * The keyboard shortcut hint for "Search projects..." is not correctly aligned in the search box, it's currently on the right side of the box but with a big empty space on the right.
+
+* Middle click should close tabs (when the tab is closable).
 
 HACKS
 
