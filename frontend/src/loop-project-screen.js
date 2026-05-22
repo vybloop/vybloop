@@ -75,6 +75,7 @@ class LoopProjectScreen extends LitElement {
     _openFiles: { state: true },
     _openDiffs: { state: true },
     _dialog: { state: true },
+    _ports: { state: true },
   };
 
   static styles = [css`
@@ -175,7 +176,20 @@ class LoopProjectScreen extends LitElement {
       border: 1px solid var(--line-soft);
       border-radius: var(--radius-sm);
       padding: 6px 10px;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
     }
+    .server-bar:hover {
+      background: var(--bg-3);
+      border-color: var(--accent);
+    }
+    .server-bar-icon {
+      color: var(--fg-3);
+      display: flex;
+      align-items: center;
+    }
+    .server-bar:hover .server-bar-icon { color: var(--fg-1); }
     .server-info {
       display: flex;
       align-items: center;
@@ -1054,6 +1068,7 @@ class LoopProjectScreen extends LitElement {
     this._expandedDirs = new Set();
     this._openFiles = [];   // [{ path, dirty }]
     this._openDiffs = [];   // [{ tabId, path, staged }]
+    this._ports = [];
     this._dialog = null;    // null | { type, ...data }
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileMtimes = new Map();       // path -> server mtime
@@ -1087,6 +1102,10 @@ class LoopProjectScreen extends LitElement {
       this._connectSse();
       // Connect the terminal once the project arrives (terminal is already initialized)
       if (this._term && !this._termWs) this._connectWs();
+    }
+    if (changed.has('_running')) {
+      if (this._running) this._fetchPorts();
+      else this._ports = [];
     }
     if (changed.has('_activeTab')) {
       if (this._activeTab === 'agent') {
@@ -1669,6 +1688,14 @@ class LoopProjectScreen extends LitElement {
     }
   }
 
+  async _fetchPorts() {
+    if (!this.project) return;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/ports`);
+      if (res.ok) this._ports = await res.json();
+    } catch { /* ignore */ }
+  }
+
   async _commit() {
     if (!this.project || !this._commitMsg.trim()) return;
     const staged = this._staged();
@@ -1835,15 +1862,19 @@ class LoopProjectScreen extends LitElement {
               <button class="chevron-btn">${iconChevronDown}</button>
             </div>
             ${this._running ? html`
-              <div class="server-bar">
+              <a class="server-bar"
+                href=${this._ports.length ? `http://${window.location.hostname}:${this._ports[0].hostPort}` : '#'}
+                target="_blank" rel="noopener noreferrer">
                 <div class="server-info">
                   <span class="server-dot"></span>
                   <span>dev server</span>
-                  <span>·</span>
-                  <span class="server-link">localhost:3000</span>
+                  ${this._ports.length ? html`
+                    <span>·</span>
+                    <span class="server-link">${window.location.hostname}:${this._ports[0].hostPort}</span>
+                  ` : ''}
                 </div>
-                <button class="icon-btn-sm" title="Open in browser">${iconExternal}</button>
-              </div>
+                <span class="server-bar-icon">${iconExternal}</span>
+              </a>
             ` : ''}
           ` : ''}
         </div>

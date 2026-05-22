@@ -110,6 +110,29 @@ app.post('/api/projects/:id/run', async (req, res) => {
   }
 });
 
+app.get('/api/projects/:id/ports', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const repoPath = `/data/${req.params.id}/git`;
+  try {
+    const { stdout: idsOut } = await execFileAsync('podman', ['compose', 'ps', '-q'], { cwd: repoPath });
+    const ids = idsOut.trim().split('\n').filter(Boolean);
+    const ports = [];
+    for (const containerId of ids) {
+      try {
+        const { stdout } = await execFileAsync('podman', ['port', containerId]);
+        for (const line of stdout.trim().split('\n').filter(Boolean)) {
+          const match = line.match(/^(\d+)\/(tcp|udp)\s+->\s+[\d.]+:(\d+)$/);
+          if (match) ports.push({ containerPort: +match[1], protocol: match[2], hostPort: +match[3] });
+        }
+      } catch { /* container may have no exposed ports */ }
+    }
+    res.json(ports);
+  } catch {
+    res.json([]);
+  }
+});
+
 app.get('/api/projects/:id/remote-status', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
