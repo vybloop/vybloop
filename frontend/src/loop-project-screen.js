@@ -647,6 +647,13 @@ class LoopProjectScreen extends LitElement {
       transition: opacity 0.15s, transform 0.15s;
     }
     .input-fab:active { transform: scale(0.93); }
+    .input-fab-stop {
+      bottom: 116px;
+      background: oklch(0.72 0.18 25 / 0.15);
+      color: var(--del);
+      border: 1px solid oklch(0.72 0.18 25 / 0.3);
+      box-shadow: 0 2px 12px oklch(0 0 0 / 0.2);
+    }
     .mobile-input-backdrop {
       position: absolute;
       inset: 0;
@@ -943,6 +950,12 @@ class LoopProjectScreen extends LitElement {
 
   _back() {
     this.dispatchEvent(new CustomEvent('navigate-home', { bubbles: true, composed: true }));
+  }
+
+  _sendEscape() {
+    if (this._termWs?.readyState === WebSocket.OPEN) {
+      this._termWs.send(JSON.stringify({ type: 'input', data: '\x1b' }));
+    }
   }
 
   _sendMobileInput() {
@@ -1262,6 +1275,7 @@ class LoopProjectScreen extends LitElement {
             >${iconSend}</button>
           </div>
         ` : html`
+          <button class="input-fab input-fab-stop" @click=${this._sendEscape}>${iconStop}</button>
           <button class="input-fab" @click=${() => this._inputOpen = true}>${iconPencil}</button>
         `}
       ` : ''}
