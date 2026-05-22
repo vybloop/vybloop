@@ -795,6 +795,7 @@ class LoopProjectScreen extends LitElement {
     .tabs {
       overflow-x: auto;
       scrollbar-width: none;
+      overflow-y: hidden;
     }
     .tabs::-webkit-scrollbar { display: none; }
     .file-tab {
