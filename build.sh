@@ -6,9 +6,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "==> Building podman-base image..."
 docker build -t podman-base "$SCRIPT_DIR/podman"
 
-echo "==> Building podman-web image..."
-docker build -t podman-web "$SCRIPT_DIR/podman-web"
-
 echo "==> Building main app image..."
 docker compose -f "$SCRIPT_DIR/docker-compose.yml" build
 

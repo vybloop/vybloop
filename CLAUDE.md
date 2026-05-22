@@ -4,13 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Run
 
-```bash
-cd backend && npm install && node src/server.js
-# In another terminal:
-cd frontend && npm install && npm run dev
-```
-
-The backend serves the API on port 3000. The Vite dev server proxies API/WebSocket requests to it. Access the UI at http://localhost:5173 (dev) or http://localhost:3000 (production build served by Express).
+The app needs the `podman-base` image to be built first (in the `podman` directory). After that it can be run with docker compose. In most cases there should be no need to run the app while doing UI changes.
 
 ## Architecture
 
