@@ -70,3 +70,11 @@ export function getOrCreateWatcher(projectId) {
   }
   return watchers.get(projectId);
 }
+
+export function broadcastStatus(projectId, status) {
+  const watcher = watchers.get(projectId);
+  if (!watcher) return;
+  for (const res of watcher.clients) {
+    sendEvent(res, 'status', { status });
+  }
+}

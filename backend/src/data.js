@@ -345,6 +345,7 @@ export async function getProjects() {
     ...p,
     status: projectStatus[p.id] ?? 'idle',
     changes: counts[i],
+    hasCompose: getHasCompose(p.id),
   }));
 }
 
@@ -356,6 +357,7 @@ export async function getProject(id) {
     ...p,
     status: projectStatus[p.id] ?? 'idle',
     changes,
+    hasCompose: getHasCompose(id),
   };
 }
 
@@ -407,12 +409,17 @@ export async function stageAll(id) {
   return getGitChanges(id);
 }
 
-export function toggleRun(id) {
+export function setProjectStatus(id, status) {
   const project = projects.find(p => p.id === id);
   if (!project) return null;
-  const current = projectStatus[id] ?? 'idle';
-  projectStatus[id] = current === 'running' ? 'idle' : 'running';
-  return { status: projectStatus[id] };
+  projectStatus[id] = status;
+  return { status };
+}
+
+export function getHasCompose(id) {
+  const repoPath = `/data/${id}/git`;
+  return ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']
+    .some(f => existsSync(join(repoPath, f)));
 }
 
 function applyGitAuthor(name, email) {

@@ -4,6 +4,8 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { TerminalSession, DirectSession } from './terminal-session.js';
 import {
   getProjects,
@@ -12,7 +14,8 @@ import {
   cloneRepo,
   getChanges,
   commitChanges,
-  toggleRun,
+  setProjectStatus,
+  getHasCompose,
   toggleStage,
   stageAll,
   getRemoteStatus,
@@ -25,7 +28,9 @@ import {
   getFileDiff,
   TEMPLATES,
 } from './data.js';
-import { getOrCreateWatcher } from './file-watcher.js';
+import { getOrCreateWatcher, broadcastStatus } from './file-watcher.js';
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -76,8 +81,33 @@ app.post('/api/projects/:id/commit', async (req, res) => {
 app.post('/api/projects/:id/run', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
-  const result = toggleRun(req.params.id);
-  res.json(result);
+  if (!project.hasCompose) return res.status(400).json({ error: 'no compose file found' });
+
+  const id = req.params.id;
+  const repoPath = `/data/${id}/git`;
+  const isRunning = project.status === 'running';
+
+  if (isRunning) {
+    setProjectStatus(id, 'idle');
+    res.json({ status: 'idle' });
+    execFile('podman', ['compose', 'down'], { cwd: repoPath }, (err) => {
+      if (err) {
+        console.error(`[compose] down failed for ${id}:`, err.message);
+        setProjectStatus(id, 'error');
+        broadcastStatus(id, 'error');
+      }
+    });
+  } else {
+    setProjectStatus(id, 'running');
+    res.json({ status: 'running' });
+    execFile('podman', ['compose', 'up', '--build', '-d'], { cwd: repoPath }, (err) => {
+      if (err) {
+        console.error(`[compose] up failed for ${id}:`, err.message);
+        setProjectStatus(id, 'error');
+        broadcastStatus(id, 'error');
+      }
+    });
+  }
 });
 
 app.get('/api/projects/:id/remote-status', async (req, res) => {
@@ -328,7 +358,25 @@ wss.on('connection', async (ws, req, projectId, sessionType) => {
   }
 });
 
+async function restoreComposeStates() {
+  const allProjects = await getProjects();
+  for (const p of allProjects) {
+    if (!p.hasCompose) continue;
+    const repoPath = `/data/${p.id}/git`;
+    try {
+      const { stdout } = await execFileAsync('podman', ['compose', 'ps', '-q'], { cwd: repoPath });
+      if (stdout.trim()) {
+        setProjectStatus(p.id, 'running');
+        console.log(`[compose] restored running state for ${p.id}`);
+      }
+    } catch {
+      // compose not available or no containers running
+    }
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Loop server running on port ${PORT}`);
+  restoreComposeStates().catch(console.error);
 });

@@ -13,6 +13,10 @@ RUN apt-get update && apt-get install -y \
 RUN printf '[storage]\ndriver = "overlay"\n\n[storage.options.overlay]\nmount_program = "/usr/bin/fuse-overlayfs"\nskip_mount_home = "true"\n' \
     > /etc/containers/storage.conf
 
+# Allow short image names (e.g. "golang:1.23-alpine") to resolve via docker.io,
+# matching Docker's default behaviour.
+COPY registries.conf /etc/containers/registries.conf
+
 # Create a non-root user for running Podman rootlessly
 RUN useradd -m -s /bin/bash poduser && \
     echo "poduser:100000:65536" >> /etc/subuid && \

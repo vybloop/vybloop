@@ -1274,6 +1274,7 @@ class LoopProjectScreen extends LitElement {
     this._sse = new EventSource(`/api/projects/${this.project.id}/events`);
     this._sse.addEventListener('changes', (e) => { this._files = JSON.parse(e.data); });
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
+    this._sse.addEventListener('status', (e) => { this._running = JSON.parse(e.data).status === 'running'; });
   }
 
   _isFilePath(tab) {
@@ -1823,25 +1824,27 @@ class LoopProjectScreen extends LitElement {
     return html`
       <div class="sidebar ${asTab ? 'as-tab' : ''}">
         <div class="sidebar-top">
-          <div class="run-row">
-            <button class="run-btn ${this._running ? 'running' : 'idle'}" @click=${this._toggleRun}>
-              ${this._running
-                ? html`<span class="run-btn-pulse"></span>Stop`
-                : html`${iconPlay} Run`
-              }
-            </button>
-            <button class="chevron-btn">${iconChevronDown}</button>
-          </div>
-          ${this._running ? html`
-            <div class="server-bar">
-              <div class="server-info">
-                <span class="server-dot"></span>
-                <span>dev server</span>
-                <span>·</span>
-                <span class="server-link">localhost:3000</span>
-              </div>
-              <button class="icon-btn-sm" title="Open in browser">${iconExternal}</button>
+          ${this.project?.hasCompose ? html`
+            <div class="run-row">
+              <button class="run-btn ${this._running ? 'running' : 'idle'}" @click=${this._toggleRun}>
+                ${this._running
+                  ? html`<span class="run-btn-pulse"></span>Stop`
+                  : html`${iconPlay} Run`
+                }
+              </button>
+              <button class="chevron-btn">${iconChevronDown}</button>
             </div>
+            ${this._running ? html`
+              <div class="server-bar">
+                <div class="server-info">
+                  <span class="server-dot"></span>
+                  <span>dev server</span>
+                  <span>·</span>
+                  <span class="server-link">localhost:3000</span>
+                </div>
+                <button class="icon-btn-sm" title="Open in browser">${iconExternal}</button>
+              </div>
+            ` : ''}
           ` : ''}
         </div>
 
