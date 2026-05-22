@@ -308,6 +308,7 @@ class LoopProjectScreen extends LitElement {
       min-height: 30px;
     }
     .file-row:hover { background: var(--bg-2); }
+    .file-row.no-diff { cursor: default; }
     .file-row.selected { background: var(--accent-soft); }
     .file-row.selected .file-path { color: var(--accent); }
     .file-checkbox {
@@ -1344,6 +1345,7 @@ class LoopProjectScreen extends LitElement {
   }
 
   async _openDiff(file) {
+    if (file.path.endsWith('/')) return;
     const tabId = this._diffTabId(file.path, file.staged);
     if (this._diffModels.has(tabId)) {
       this._activeTab = tabId;
@@ -1728,10 +1730,11 @@ class LoopProjectScreen extends LitElement {
 
   _renderFileRow(file) {
     const { dir, filename } = this._pathParts(file.path);
+    const isDir = file.path.endsWith('/');
     const tabId = this._diffTabId(file.path, file.staged);
     const isActive = this._activeTab === tabId;
     return html`
-      <div class="file-row ${isActive ? 'selected' : ''}" @click=${() => this._openDiff(file)}>
+      <div class="file-row ${isActive ? 'selected' : ''} ${isDir ? 'no-diff' : ''}" @click=${() => this._openDiff(file)}>
         <div class="file-checkbox ${file.staged ? 'checked' : ''}"
           @click=${(e) => { e.stopPropagation(); this._toggleStage(file); }}>
           ${file.staged ? html`
