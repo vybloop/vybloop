@@ -720,10 +720,16 @@ class LoopProjectScreen extends LitElement {
       this._termFit?.fit();
       const { cols, rows } = this._term;
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      
       setTimeout(() => {
         if (ws.readyState === WebSocket.OPEN) {
           this._termFit?.fit();
           const { cols, rows } = this._term;
+          // HACK: Send Ctrl-L then a delayed resize to trigger a redraw on reconnect.
+          // The Ctrl-L causes Claude Code to repaint the screen, and the resize nudges
+          // the PTY into the correct dimensions after layout settles. A proper fix would
+          // require full TTY output record/replay so reconnecting clients see current state.
+          ws.send(JSON.stringify({ type: 'input', data: '\x0c' }));
           ws.send(JSON.stringify({ type: 'resize', cols, rows }));
         }
       }, 1000);
