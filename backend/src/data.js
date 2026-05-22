@@ -129,6 +129,30 @@ export function saveFileContent(id, filePath, content, mtime, force = false) {
   }
 }
 
+export async function getFileDiff(id, filePath, staged) {
+  const cwd = gitDir(id);
+  if (!existsSync(cwd)) return null;
+  const base = cwd;
+  const abs = resolve(base, normalize(filePath));
+  if (!abs.startsWith(base + '/') && abs !== base) return null;
+
+  let original = '';
+  let modified = '';
+
+  if (staged) {
+    [original, modified] = await Promise.all([
+      runGit(cwd, ['show', `HEAD:${filePath}`]),
+      runGit(cwd, ['show', `:${filePath}`]),
+    ]);
+  } else {
+    original = await runGit(cwd, ['show', `:${filePath}`]);
+    if (!original) original = await runGit(cwd, ['show', `HEAD:${filePath}`]);
+    try { modified = readFileSync(abs, 'utf8'); } catch { modified = ''; }
+  }
+
+  return { original, modified };
+}
+
 function runGit(cwd, args) {
   return new Promise((resolve) => {
     if (!existsSync(cwd)) {

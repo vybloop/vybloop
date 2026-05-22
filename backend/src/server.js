@@ -22,6 +22,7 @@ import {
   getFileTree,
   getFileContent,
   saveFileContent,
+  getFileDiff,
   TEMPLATES,
 } from './data.js';
 
@@ -105,6 +106,17 @@ app.post('/api/projects/:id/changes/:fileId/toggle', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'not found' });
   const result = await toggleStage(req.params.id, req.params.fileId);
   if (!result) return res.status(404).json({ error: 'file not found' });
+  res.json(result);
+});
+
+app.get('/api/projects/:id/diff', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path is required' });
+  const staged = req.query.staged === 'true';
+  const result = await getFileDiff(req.params.id, filePath, staged);
+  if (!result) return res.status(404).json({ error: 'not found' });
   res.json(result);
 });
 

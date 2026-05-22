@@ -11,11 +11,13 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import * as monaco from 'monaco-editor';
 import monacoCSS from 'monaco-editor/min/vs/editor/editor.main.css?inline';
+import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 
-// No-op worker: we're read-only so we don't need language intelligence.
-// Monaco falls back to main-thread tokenization for syntax highlighting.
+// Use the real editor worker for diff computation.
+// Language-service workers (TS, JSON, CSS) are no-ops since we don't need intellisense.
 window.MonacoEnvironment = {
-  getWorker() {
+  getWorker(_id, label) {
+    if (label === 'editorWorkerService') return new EditorWorker();
     const blob = new Blob(['self.onmessage=function(){}'], { type: 'application/javascript' });
     return new Worker(URL.createObjectURL(blob));
   },
@@ -306,6 +308,8 @@ class LoopProjectScreen extends LitElement {
       min-height: 30px;
     }
     .file-row:hover { background: var(--bg-2); }
+    .file-row.selected { background: var(--accent-soft); }
+    .file-row.selected .file-path { color: var(--accent); }
     .file-checkbox {
       width: 14px;
       height: 14px;
@@ -763,6 +767,21 @@ class LoopProjectScreen extends LitElement {
       min-height: 0;
       overflow: hidden;
     }
+    #diff-container {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .diff-tab-badge {
+      font-size: 9px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      color: var(--mod);
+      background: oklch(0.78 0.14 80 / 0.15);
+      border-radius: 3px;
+      padding: 0 3px;
+      flex-shrink: 0;
+    }
     .file-tab-name {
       max-width: 180px;
       overflow: hidden;
@@ -1030,12 +1049,15 @@ class LoopProjectScreen extends LitElement {
     this._filesLoading = false;
     this._expandedDirs = new Set();
     this._openFiles = [];   // [{ path, dirty }]
+    this._openDiffs = [];   // [{ tabId, path, staged }]
     this._dialog = null;    // null | { type, ...data }
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileMtimes = new Map();       // path -> server mtime
     this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
     this._fileChangeListeners = new Map(); // path -> IDisposable
+    this._diffModels = new Map();       // tabId -> { original, modified } ITextModel pair
     this._monacoEditor = null;
+    this._monacoDiffEditor = null;
     this._pollInterval = null;
     this._styleObserver = null;
     this._mqHandler = (e) => {
@@ -1075,6 +1097,13 @@ class LoopProjectScreen extends LitElement {
           requestAnimationFrame(() => this._monacoEditor?.layout());
         }
         this._startPolling(true);
+      } else if (this._isDiffTab(this._activeTab)) {
+        this._stopPolling();
+        this._ensureMonacoDiff();
+        if (this._monacoDiffEditor) {
+          const models = this._diffModels.get(this._activeTab);
+          if (models) this._monacoDiffEditor.setModel(models);
+        }
       } else {
         this._stopPolling();
       }
@@ -1102,8 +1131,12 @@ class LoopProjectScreen extends LitElement {
     this._fileChangeListeners.clear();
     this._fileModels.forEach(m => m.dispose());
     this._fileModels.clear();
+    this._diffModels.forEach(({ original, modified }) => { original?.dispose(); modified?.dispose(); });
+    this._diffModels.clear();
     this._monacoEditor?.dispose();
     this._monacoEditor = null;
+    this._monacoDiffEditor?.dispose();
+    this._monacoDiffEditor = null;
     this._styleObserver?.disconnect();
     this._styleObserver = null;
   }
@@ -1230,7 +1263,15 @@ class LoopProjectScreen extends LitElement {
   }
 
   _isFilePath(tab) {
-    return !['agent', 'logs', 'shell', 'changes'].includes(tab);
+    return !['agent', 'logs', 'shell', 'changes'].includes(tab) && !this._isDiffTab(tab);
+  }
+
+  _isDiffTab(tab) {
+    return typeof tab === 'string' && tab.startsWith('diff:');
+  }
+
+  _diffTabId(path, staged) {
+    return `diff:${staged ? 'staged' : 'unstaged'}:${path}`;
   }
 
   async _openFile(filePath) {
@@ -1300,6 +1341,89 @@ class LoopProjectScreen extends LitElement {
       this._activeTab = remaining.length > 0 ? remaining.at(-1).path : 'agent';
     }
     this._dialog = null;
+  }
+
+  async _openDiff(file) {
+    const tabId = this._diffTabId(file.path, file.staged);
+    if (this._diffModels.has(tabId)) {
+      this._activeTab = tabId;
+      return;
+    }
+    // Add tab immediately
+    if (!this._openDiffs.find(d => d.tabId === tabId)) {
+      this._openDiffs = [...this._openDiffs, { tabId, path: file.path, staged: file.staged }];
+    }
+    this._activeTab = tabId;
+
+    try {
+      const params = new URLSearchParams({ path: file.path, staged: String(file.staged) });
+      const res = await fetch(`/api/projects/${this.project.id}/diff?${params}`);
+      if (!res.ok) { this._closeDiff(tabId); return; }
+      const { original, modified } = await res.json();
+      const lang = detectLanguage(file.path);
+      const models = {
+        original: monaco.editor.createModel(original, lang),
+        modified: monaco.editor.createModel(modified, lang),
+      };
+      this._diffModels.set(tabId, models);
+      if (this._activeTab === tabId) {
+        this._ensureMonacoDiff();
+        if (this._monacoDiffEditor) this._monacoDiffEditor.setModel(models);
+      }
+    } catch (e) {
+      console.error('Failed to load diff', e);
+      this._closeDiff(tabId);
+    }
+  }
+
+  _closeDiff(tabId, e) {
+    e?.stopPropagation();
+    const models = this._diffModels.get(tabId);
+    if (models) { models.original?.dispose(); models.modified?.dispose(); }
+    this._diffModels.delete(tabId);
+    const remaining = this._openDiffs.filter(d => d.tabId !== tabId);
+    this._openDiffs = remaining;
+    if (this._activeTab === tabId) {
+      if (remaining.length > 0) this._activeTab = remaining.at(-1).tabId;
+      else if (this._openFiles.length > 0) this._activeTab = this._openFiles.at(-1).path;
+      else this._activeTab = 'agent';
+    }
+  }
+
+  _ensureMonacoDiff() {
+    const container = this.shadowRoot?.querySelector('#diff-container');
+    if (!container) return;
+    if (this._monacoDiffEditor) {
+      const r = container.getBoundingClientRect();
+      if (r.width && r.height) this._monacoDiffEditor.layout({ width: r.width, height: r.height });
+      return;
+    }
+    const { width, height } = container.getBoundingClientRect();
+    if (width === 0 || height === 0) {
+      requestAnimationFrame(() => this._ensureMonacoDiff());
+      return;
+    }
+    this._monacoDiffEditor = monaco.editor.createDiffEditor(container, {
+      theme: 'vs-dark',
+      fontSize: 13,
+      fontFamily: '"Cascadia Code", ui-monospace, monospace',
+      fontLigatures: true,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      readOnly: true,
+      renderSideBySide: true,
+      ignoreTrimWhitespace: false,
+    });
+    this._monacoDiffEditor.layout({ width, height });
+    new ResizeObserver(() => {
+      const r = container.getBoundingClientRect();
+      if (r.width && r.height) this._monacoDiffEditor?.layout({ width: r.width, height: r.height });
+    }).observe(container);
+    this._mirrorMonacoStyles();
+    if (this._isDiffTab(this._activeTab)) {
+      const models = this._diffModels.get(this._activeTab);
+      if (models) this._monacoDiffEditor.setModel(models);
+    }
   }
 
   async _saveFile(path, force = false) {
@@ -1604,9 +1728,12 @@ class LoopProjectScreen extends LitElement {
 
   _renderFileRow(file) {
     const { dir, filename } = this._pathParts(file.path);
+    const tabId = this._diffTabId(file.path, file.staged);
+    const isActive = this._activeTab === tabId;
     return html`
-      <div class="file-row" @click=${() => this._toggleStage(file)}>
-        <div class="file-checkbox ${file.staged ? 'checked' : ''}">
+      <div class="file-row ${isActive ? 'selected' : ''}" @click=${() => this._openDiff(file)}>
+        <div class="file-checkbox ${file.staged ? 'checked' : ''}"
+          @click=${(e) => { e.stopPropagation(); this._toggleStage(file); }}>
           ${file.staged ? html`
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
               <path d="m5 12 5 5L20 7"/>
@@ -1995,6 +2122,24 @@ class LoopProjectScreen extends LitElement {
                   </div>
                 `;
               })}
+              ${this._openDiffs.map(({ tabId, path }) => {
+                const filename = path.split('/').pop();
+                return html`
+                  <div
+                    class="tab file-tab ${this._activeTab === tabId ? 'active' : ''}"
+                    @click=${() => this._activeTab = tabId}
+                    @auxclick=${(e) => e.button === 1 && this._closeDiff(tabId, e)}
+                  >
+                    <span class="file-tab-name">${filename}</span>
+                    <span class="diff-tab-badge">diff</span>
+                    <span class="tab-close" @click=${(e) => this._closeDiff(tabId, e)}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 6 6 18M6 6l12 12"/>
+                      </svg>
+                    </span>
+                  </div>
+                `;
+              })}
             </div>
             <div class="${this._running ? 'connection-chip' : 'connection-chip idle-chip'}">
               <span class="dot"></span>
@@ -2009,6 +2154,7 @@ class LoopProjectScreen extends LitElement {
           ${this._activeTab === 'shell' ? this._renderShellPlaceholder() : ''}
           ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
           <div id="monaco-container" style="display:${this._isFilePath(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
+          <div id="diff-container" style="display:${this._isDiffTab(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
 
         </div>
       </div>

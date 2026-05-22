@@ -2,7 +2,7 @@ After completing a task, delete it from this file.
 
 * The keyboard shortcut hint for "Search projects..." is not correctly aligned in the search box, it's currently on the right side of the box but with a big empty space on the right.
 
-* Middle click should close tabs (when the tab is closable).
+* Fix the timezone in the container.
 
 HACKS
 
