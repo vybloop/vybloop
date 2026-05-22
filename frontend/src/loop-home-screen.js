@@ -4,6 +4,10 @@ import {
   iconPlus, iconSearch, iconGrid, iconList, iconGit, iconBranch, iconChevron
 } from './icons.js';
 
+const _isMac = /Macintosh|MacIntel/.test(navigator.userAgent);
+const _isMobile = window.matchMedia('(pointer: coarse)').matches;
+const _modKey = _isMac ? '⌘' : 'Ctrl-';
+
 class LoopHomeScreen extends LitElement {
   static properties = {
     projects: { type: Array },
@@ -93,12 +97,16 @@ class LoopHomeScreen extends LitElement {
       color: var(--fg-0);
       font-family: var(--font-sans);
       font-size: 13px;
-      padding: 0 80px 0 34px;
+      padding: 0 56px 0 34px;
       outline: none;
       transition: border-color 0.12s;
     }
     .search-input::placeholder { color: var(--fg-3); }
     .search-input:focus { border-color: var(--accent); }
+    @media (pointer: coarse) {
+      .search-input { padding-right: 10px; }
+      .search-shortcut { display: none; }
+    }
     .search-shortcut {
       position: absolute;
       right: 10px;
@@ -536,7 +544,7 @@ class LoopHomeScreen extends LitElement {
               .value=${this._search}
               @input=${e => this._search = e.target.value}
             />
-            <span class="search-shortcut">⌘K</span>
+            <span class="search-shortcut">${_modKey}K</span>
           </div>
           <div class="view-toggle">
             <button class="view-btn ${this._viewMode === 'grid' ? 'active' : ''}" @click=${() => this._viewMode = 'grid'} title="Grid view">

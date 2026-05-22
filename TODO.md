@@ -7,4 +7,7 @@ After completing a task, delete it from this file.
 
 * Need proper SPA style nav bar updates
 
-* Need to update all mac style shortcut hints like ⌘K to be correct on windows and mobile. If we can detect mobile we should just hide those hints. Additionally, the hint for "Search projects..." is not correctly aligned in the search box, it's currently on the right side of the box but with a big empty space on the right.
+* The keyboard shortcut hint for "Search projects..." is not correctly aligned in the search box, it's currently on the right side of the box but with a big empty space on the right.
+
+
+* The virtual terminal is empty whenever you navigate to it after it's already started. Maybe we fix this by logging all data sent from the terminal and replay it for every new connection.

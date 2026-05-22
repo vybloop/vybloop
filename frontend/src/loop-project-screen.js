@@ -9,6 +9,9 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 
+const _isMac = /Macintosh|MacIntel/.test(navigator.userAgent);
+const _modKey = _isMac ? '⌘' : 'Ctrl-';
+
 class LoopProjectScreen extends LitElement {
   static properties = {
     project: { type: Object },
@@ -612,6 +615,11 @@ class LoopProjectScreen extends LitElement {
         padding: 10px;
       }
     }
+    @media (pointer: coarse) {
+      .shortcuts {
+        display: none;
+      }
+    }
   `, unsafeCSS(xtermCss)];
 
   constructor() {
@@ -1111,9 +1119,9 @@ class LoopProjectScreen extends LitElement {
 
           <div class="terminal-footer">
             <div class="shortcuts">
-              <span class="shortcut-hint"><span class="kbd">⌘ ↵</span> send</span>
-              <span class="shortcut-hint"><span class="kbd">⌘ K</span> clear</span>
-              <span class="shortcut-hint"><span class="kbd">⌘ .</span> interrupt</span>
+              <span class="shortcut-hint"><span class="kbd">${_modKey} ↵</span> send</span>
+              <span class="shortcut-hint"><span class="kbd">${_modKey} K</span> clear</span>
+              <span class="shortcut-hint"><span class="kbd">${_modKey} .</span> interrupt</span>
             </div>
             <div class="footer-right">
               <span class="footer-template">
