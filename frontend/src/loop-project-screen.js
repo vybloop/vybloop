@@ -439,7 +439,7 @@ class LoopProjectScreen extends LitElement {
       flex-shrink: 0;
     }
     .commit-textarea {
-      width: 100%;
+      width: 93%;
       min-height: 62px;
       background: var(--bg-2);
       border: 1px solid var(--line-soft);
