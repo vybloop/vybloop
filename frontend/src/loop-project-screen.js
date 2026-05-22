@@ -603,7 +603,7 @@ class LoopProjectScreen extends LitElement {
       flex-shrink: 0;
     }
     .tab {
-      padding: 12px 14px;
+      padding: 5px 8px;
       font-size: 13px;
       font-weight: 500;
       color: var(--fg-3);
@@ -1983,6 +1983,7 @@ class LoopProjectScreen extends LitElement {
                   <div
                     class="tab file-tab ${this._activeTab === path ? 'active' : ''}"
                     @click=${() => this._activeTab = path}
+                    @auxclick=${(e) => e.button === 1 && this._closeFile(path, e)}
                   >
                     <span class="file-tab-name">${filename}</span>
                     ${dirty ? html`<span class="file-tab-dirty" title="Unsaved changes"></span>` : ''}
