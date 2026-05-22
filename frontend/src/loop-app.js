@@ -25,6 +25,7 @@ class LoopApp extends LitElement {
       flex-direction: column;
       flex: 1;
       overflow: hidden;
+      height: 100%;
     }
   `;
 

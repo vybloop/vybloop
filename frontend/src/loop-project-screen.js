@@ -50,7 +50,7 @@ class LoopProjectScreen extends LitElement {
       display: flex;
       flex-direction: column;
       min-height: 0;
-      overflow: hidden;
+      overflow: hidden scroll;
     }
     .sidebar.as-tab {
       width: 100%;
@@ -160,7 +160,7 @@ class LoopProjectScreen extends LitElement {
 
     /* Changes section */
     .changes-section {
-      flex: 1;
+      flex-shrink: 0;
       min-height: 0;
       overflow-y: auto;
       padding: 0;
