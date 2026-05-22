@@ -33,23 +33,61 @@ class LoopApp extends LitElement {
     this._route = 'home';
     this._projectId = null;
     this._projects = [];
+    this._onPopState = this._onPopState.bind(this);
   }
 
   connectedCallback() {
     super.connectedCallback();
     this._fetchProjects();
+    this._applyLocation(window.location, false);
+    window.addEventListener('popstate', this._onPopState);
 
-    this.addEventListener('navigate-new', () => this._route = 'new');
-    this.addEventListener('navigate-home', () => this._route = 'home');
-    this.addEventListener('navigate-project', (e) => {
-      this._projectId = e.detail.id;
-      this._route = 'project';
-    });
+    this.addEventListener('navigate-new', () => this._navigate('new', null));
+    this.addEventListener('navigate-home', () => this._navigate('home', null));
+    this.addEventListener('navigate-project', (e) => this._navigate('project', e.detail.id));
     this.addEventListener('project-created', (e) => {
       this._projects = [...this._projects, e.detail.project];
-      this._projectId = e.detail.project.id;
-      this._route = 'project';
+      this._navigate('project', e.detail.project.id);
     });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    window.removeEventListener('popstate', this._onPopState);
+  }
+
+  _applyLocation(location, push) {
+    const path = location.pathname;
+    let route, projectId = null;
+    if (path === '/new') {
+      route = 'new';
+    } else if (path.startsWith('/project/')) {
+      route = 'project';
+      projectId = path.slice('/project/'.length);
+    } else {
+      route = 'home';
+    }
+    if (push) {
+      window.history.pushState({ route, projectId }, '', this._routeToPath(route, projectId));
+    }
+    this._route = route;
+    this._projectId = projectId;
+  }
+
+  _routeToPath(route, projectId) {
+    if (route === 'new') return '/new';
+    if (route === 'project') return `/project/${projectId}`;
+    return '/';
+  }
+
+  _navigate(route, projectId) {
+    window.history.pushState({ route, projectId }, '', this._routeToPath(route, projectId));
+    this._route = route;
+    this._projectId = projectId;
+  }
+
+  _onPopState(e) {
+    this._applyLocation(window.location, false);
   }
 
   async _fetchProjects() {
