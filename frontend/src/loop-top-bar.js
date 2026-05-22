@@ -42,17 +42,6 @@ class LoopTopBar extends LitElement {
       color: var(--fg-0);
       letter-spacing: -0.02em;
     }
-    .self-hosted-tag {
-      font-size: 10px;
-      font-weight: 500;
-      color: var(--fg-3);
-      background: var(--bg-3);
-      border: 1px solid var(--line-soft);
-      border-radius: 4px;
-      padding: 1px 6px;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
     .breadcrumb {
       display: flex;
       align-items: center;
@@ -254,7 +243,6 @@ class LoopTopBar extends LitElement {
               </svg>
             </div>
             <span class="logo-text">loop</span>
-            <span class="self-hosted-tag">self-hosted</span>
           </div>
           <div class="breadcrumb">
             <slot name="breadcrumb"></slot>
