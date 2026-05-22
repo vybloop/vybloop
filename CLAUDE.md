@@ -10,7 +10,7 @@ The app needs the `podman-base` image to be built first (in the `podman` directo
 
 A project management UI ("Loop") for running Claude Code agents against multiple projects. Two components:
 
-- **`backend/`** — Express + WebSocket server (Node.js, port 3000)
+- **`backend/`** — Express + WebSocket server (Node.js, port 9876)
 - **`frontend/`** — Vite + Lit web app
 
 ### Data file — `data/projects.json`

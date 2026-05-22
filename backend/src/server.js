@@ -375,7 +375,7 @@ async function restoreComposeStates() {
   }
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 9876;
 server.listen(PORT, () => {
   console.log(`Loop server running on port ${PORT}`);
   restoreComposeStates().catch(console.error);

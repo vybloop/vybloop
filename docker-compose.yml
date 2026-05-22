@@ -2,14 +2,14 @@ services:
   loop:
     build: .
     privileged: true
-    ports:
-      - "9876:3000"
+    network_mode: host
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
     environment:
       - ANTHROPIC_API_KEY
+      - PORT
     volumes:
       - ./data:/data
       - podman_storage:/home/poduser/.local/share/containers

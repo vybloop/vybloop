@@ -23,6 +23,6 @@ COPY inner-container/ ./inner-container/
 COPY start.sh app-entrypoint.sh ./
 RUN chmod +x start.sh app-entrypoint.sh && chown -R poduser:poduser /app
 
-EXPOSE 3000
+EXPOSE 9876
 ENTRYPOINT ["/app/app-entrypoint.sh"]
 CMD ["/app/start.sh"]
