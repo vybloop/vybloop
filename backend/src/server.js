@@ -25,6 +25,7 @@ import {
   getFileDiff,
   TEMPLATES,
 } from './data.js';
+import { getOrCreateWatcher } from './file-watcher.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -201,6 +202,26 @@ app.get('/api/config', (req, res) => {
 app.patch('/api/config', (req, res) => {
   const result = updateConfig(req.body);
   res.json(result);
+});
+
+app.get('/api/projects/:id/events', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  // Send initial snapshot immediately
+  const [changes, tree] = await Promise.all([
+    getChanges(req.params.id),
+    Promise.resolve(getFileTree(req.params.id)),
+  ]);
+  if (changes !== null) res.write(`event: changes\ndata: ${JSON.stringify(changes)}\n\n`);
+  res.write(`event: files\ndata: ${JSON.stringify(tree ?? [])}\n\n`);
+
+  getOrCreateWatcher(req.params.id).addClient(res);
 });
 
 // SPA fallback

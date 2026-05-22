@@ -1084,6 +1084,7 @@ class LoopProjectScreen extends LitElement {
       this._running = this.project.status === 'running';
       this._loadChanges();
       this._loadFileTree();
+      this._connectSse();
       // Connect the terminal once the project arrives (terminal is already initialized)
       if (this._term && !this._termWs) this._connectWs();
     }
@@ -1122,6 +1123,8 @@ class LoopProjectScreen extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._mq?.removeEventListener('change', this._mqHandler);
+    this._sse?.close();
+    this._sse = null;
     this._termDataDisposable?.dispose();
     this._termResizeDisposable?.dispose();
     this._termWs?.close();
@@ -1264,6 +1267,13 @@ class LoopProjectScreen extends LitElement {
     } finally {
       this._filesLoading = false;
     }
+  }
+
+  _connectSse() {
+    this._sse?.close();
+    this._sse = new EventSource(`/api/projects/${this.project.id}/events`);
+    this._sse.addEventListener('changes', (e) => { this._files = JSON.parse(e.data); });
+    this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
   }
 
   _isFilePath(tab) {

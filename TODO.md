@@ -4,18 +4,20 @@ After completing a task, delete it from this file.
 
 * Add a way to revert/stash changes
 
-* Periodic refresh of files? Filesystem watcher to push updates?
+* Link to github for the project
 
-* Individual tabs should not wrap (e.g. the number of files changed in the project tab)
-
-* Tapping a folder should expand it.
+* Show git log somewhere
 
 Minor issues:
 
 * Fix the timezone in the container.
 * After a commit - close diff windows?
-* Don't try to show a diff of a directory
 * Use a generic file icon in the "changes" panel the same as the files tree (see if some things can be unified here)
+
+
+Longer term:
+
+File delete/create
 
 HACKS
 

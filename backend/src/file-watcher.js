@@ -1,0 +1,72 @@
+import chokidar from 'chokidar';
+import { getChanges, getFileTree } from './data.js';
+
+const watchers = new Map();
+
+class ProjectWatcher {
+  constructor(projectId) {
+    this.projectId = projectId;
+    this.clients = new Set();
+    this._debounceTimer = null;
+    this._chokidar = null;
+  }
+
+  _start() {
+    const repoPath = `/data/${this.projectId}/git`;
+    this._chokidar = chokidar.watch(repoPath, {
+      ignored: [/\.git\/objects/, /\.git\/refs\//],
+      ignoreInitial: true,
+      persistent: true,
+    });
+    this._chokidar.on('all', () => this._schedule());
+  }
+
+  _stop() {
+    clearTimeout(this._debounceTimer);
+    this._debounceTimer = null;
+    this._chokidar?.close();
+    this._chokidar = null;
+  }
+
+  _schedule() {
+    clearTimeout(this._debounceTimer);
+    this._debounceTimer = setTimeout(() => this._broadcast(), 300);
+  }
+
+  async _broadcast() {
+    if (this.clients.size === 0) return;
+    const [changes, tree] = await Promise.all([
+      getChanges(this.projectId),
+      Promise.resolve(getFileTree(this.projectId)),
+    ]);
+    for (const res of this.clients) {
+      if (changes !== null) sendEvent(res, 'changes', changes);
+      sendEvent(res, 'files', tree ?? []);
+    }
+  }
+
+  addClient(res) {
+    this.clients.add(res);
+    if (this.clients.size === 1) this._start();
+    res.on('close', () => this.removeClient(res));
+  }
+
+  removeClient(res) {
+    this.clients.delete(res);
+    if (this.clients.size === 0) {
+      this._stop();
+      watchers.delete(this.projectId);
+    }
+  }
+}
+
+function sendEvent(res, event, data) {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+export function getOrCreateWatcher(projectId) {
+  if (!watchers.has(projectId)) {
+    watchers.set(projectId, new ProjectWatcher(projectId));
+  }
+  return watchers.get(projectId);
+}

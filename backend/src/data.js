@@ -78,7 +78,6 @@ function buildTree(dirPath, maxDepth = 6, depth = 0) {
     if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
     return a.name.localeCompare(b.name);
   })) {
-    if (entry.name.startsWith('.') && entry.name !== '.env') continue;
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
       result.push({ name: entry.name, type: 'dir', children: buildTree(join(dirPath, entry.name), maxDepth, depth + 1) });
