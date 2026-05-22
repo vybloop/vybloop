@@ -141,19 +141,27 @@ app.post('/api/projects/:id/restart', async (req, res) => {
   const id = req.params.id;
   const repoPath = `/data/${id}/git`;
   res.json({ status: 'running' });
-  execFile('podman', ['compose', 'restart'], { cwd: repoPath }, async (err) => {
-    if (err) {
-      console.error(`[compose] restart failed for ${id}:`, err.message);
+  execFile('podman', ['compose', 'down'], { cwd: repoPath }, (downErr) => {
+    if (downErr) {
+      console.error(`[compose] restart/down failed for ${id}:`, downErr.message);
       setProjectStatus(id, 'error');
       broadcastStatus(id, 'error');
-    } else {
-      try {
-        const ports = await getContainerPorts(repoPath);
-        broadcastPorts(id, ports);
-      } catch (e) {
-        console.error(`[compose] port detection failed for ${id}:`, e.message);
-      }
+      return;
     }
+    execFile('podman', ['compose', 'up', '--build', '-d'], { cwd: repoPath }, async (upErr) => {
+      if (upErr) {
+        console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
+        setProjectStatus(id, 'error');
+        broadcastStatus(id, 'error');
+      } else {
+        try {
+          const ports = await getContainerPorts(repoPath);
+          broadcastPorts(id, ports);
+        } catch (e) {
+          console.error(`[compose] port detection failed for ${id}:`, e.message);
+        }
+      }
+    });
   });
 });
 
