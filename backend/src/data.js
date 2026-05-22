@@ -19,14 +19,19 @@ export const TEMPLATES = [
   { id: 'expo', name: 'Expo (React Native)' },
 ];
 
-const DEFAULT_DB = { nextId: 1, projects: [] };
+const DEFAULT_DB = { nextId: 1, projects: [], config: { terminalMode: 'direct' } };
+const DEFAULT_CONFIG = { terminalMode: 'direct' };
 
 function load() {
   try {
     const raw = readFileSync(DB_PATH, 'utf8');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_DB };
-    return { nextId: parsed.nextId ?? 1, projects: parsed.projects ?? [] };
+    return {
+      nextId: parsed.nextId ?? 1,
+      projects: parsed.projects ?? [],
+      config: { ...DEFAULT_CONFIG, ...(parsed.config ?? {}) },
+    };
   } catch {
     return { ...DEFAULT_DB };
   }
@@ -40,6 +45,7 @@ function save(db) {
 const db = load();
 let projects = db.projects.map(({ status, ...p }) => p);
 let nextId = db.nextId;
+let config = db.config;
 
 const projectStatus = {};
 for (const p of projects) {
@@ -49,6 +55,7 @@ for (const p of projects) {
 function persist() {
   db.projects = projects;
   db.nextId = nextId;
+  db.config = config;
   save(db);
 }
 
@@ -252,6 +259,19 @@ export function toggleRun(id) {
   const current = projectStatus[id] ?? 'idle';
   projectStatus[id] = current === 'running' ? 'idle' : 'running';
   return { status: projectStatus[id] };
+}
+
+export function getConfig() {
+  return { ...config };
+}
+
+export function updateConfig(updates) {
+  const allowed = ['terminalMode'];
+  for (const key of allowed) {
+    if (updates[key] !== undefined) config[key] = updates[key];
+  }
+  persist();
+  return { ...config };
 }
 
 export async function toggleStage(id, fileId) {

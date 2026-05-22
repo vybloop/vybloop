@@ -2,6 +2,11 @@ import { LitElement, html, css } from 'lit';
 import { iconSettings } from './icons.js';
 
 class LoopTopBar extends LitElement {
+  static properties = {
+    _configOpen: { state: true },
+    _config: { state: true },
+  };
+
   static styles = css`
     :host {
       display: block;
@@ -76,6 +81,9 @@ class LoopTopBar extends LitElement {
       background: var(--bg-3);
       color: var(--fg-0);
     }
+    .avatar-wrap {
+      position: relative;
+    }
     .avatar {
       width: 28px;
       height: 28px;
@@ -89,8 +97,112 @@ class LoopTopBar extends LitElement {
       font-weight: 600;
       cursor: pointer;
       border: 1.5px solid var(--accent);
+      user-select: none;
+    }
+    .config-popup {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      min-width: 220px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+      z-index: 100;
+    }
+    .popup-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--fg-3);
+      margin-bottom: 12px;
+    }
+    .config-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .config-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--fg-1);
+    }
+    .segmented {
+      display: flex;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .seg-btn {
+      flex: 1;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-family: var(--font-sans);
+      border: none;
+      background: transparent;
+      color: var(--fg-2);
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .seg-btn + .seg-btn {
+      border-left: 1px solid var(--line-soft);
+    }
+    .seg-btn.active {
+      background: var(--accent);
+      color: var(--accent-fg);
+    }
+    .seg-btn:not(.active):hover {
+      background: var(--bg-3);
+      color: var(--fg-0);
     }
   `;
+
+  constructor() {
+    super();
+    this._configOpen = false;
+    this._config = { terminalMode: 'tmux' };
+    this._loadConfig();
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._outsideClick = (e) => {
+      if (this._configOpen && !e.composedPath().includes(this)) {
+        this._configOpen = false;
+      }
+    };
+    document.addEventListener('click', this._outsideClick);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    document.removeEventListener('click', this._outsideClick);
+  }
+
+  async _loadConfig() {
+    try {
+      const res = await fetch('/api/config');
+      if (res.ok) this._config = await res.json();
+    } catch {}
+  }
+
+  async _setTerminalMode(mode) {
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ terminalMode: mode }),
+      });
+      if (res.ok) this._config = await res.json();
+    } catch {}
+  }
+
+  _togglePopup(e) {
+    e.stopPropagation();
+    this._configOpen = !this._configOpen;
+  }
 
   render() {
     return html`
@@ -112,7 +224,27 @@ class LoopTopBar extends LitElement {
         </div>
         <div class="right">
           <button class="icon-btn" title="Settings">${iconSettings}</button>
-          <div class="avatar">R</div>
+          <div class="avatar-wrap">
+            <div class="avatar" @click=${this._togglePopup}>R</div>
+            ${this._configOpen ? html`
+              <div class="config-popup">
+                <div class="popup-title">Settings</div>
+                <div class="config-row">
+                  <div class="config-label">Terminal mode</div>
+                  <div class="segmented">
+                    <button
+                      class="seg-btn ${this._config.terminalMode === 'tmux' ? 'active' : ''}"
+                      @click=${() => this._setTerminalMode('tmux')}
+                    >tmux</button>
+                    <button
+                      class="seg-btn ${this._config.terminalMode === 'direct' ? 'active' : ''}"
+                      @click=${() => this._setTerminalMode('direct')}
+                    >direct</button>
+                  </div>
+                </div>
+              </div>
+            ` : ''}
+          </div>
         </div>
       </div>
     `;

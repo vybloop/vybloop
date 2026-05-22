@@ -4,7 +4,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { TerminalSession } from './terminal-session.js';
+import { TerminalSession, DirectSession } from './terminal-session.js';
 import {
   getProjects,
   getProject,
@@ -15,6 +15,8 @@ import {
   toggleRun,
   toggleStage,
   stageAll,
+  getConfig,
+  updateConfig,
   TEMPLATES,
 } from './data.js';
 
@@ -88,6 +90,15 @@ app.get('/api/templates', (req, res) => {
   res.json(TEMPLATES);
 });
 
+app.get('/api/config', (req, res) => {
+  res.json(getConfig());
+});
+
+app.patch('/api/config', (req, res) => {
+  const result = updateConfig(req.body);
+  res.json(result);
+});
+
 // SPA fallback
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, '../public/index.html'));
@@ -137,17 +148,20 @@ async function getOrCreateSession(projectId, type, repoPath) {
   const makeCommand = SESSION_COMMANDS[type];
   if (!makeCommand) return null;
 
-  const session = new TerminalSession({
-    sessionKey: tmuxName(projectId, type),
-    command: makeCommand(repoPath),
-    cwd: process.env.HOME || '/home/poduser',
-  });
+  const { terminalMode } = getConfig();
+  const cwd = process.env.HOME || '/home/poduser';
+  const command = makeCommand(repoPath);
+
+  const session = terminalMode === 'direct'
+    ? new DirectSession({ command, cwd })
+    : new TerminalSession({ sessionKey: tmuxName(projectId, type), command, cwd });
+
   session.onExit = () => sessions.delete(key);
 
   try {
     await session.start();
   } catch (err) {
-    console.error(`Failed to start tmux session ${tmuxName(projectId, type)}:`, err.message);
+    console.error(`Failed to start session for ${projectId}/${type}:`, err.message);
     return null;
   }
 

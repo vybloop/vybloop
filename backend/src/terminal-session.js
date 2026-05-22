@@ -144,3 +144,77 @@ export class TerminalSession {
     try { await execFileAsync('tmux', tmuxArgs('kill-session', '-t', this.sessionKey)); } catch {}
   }
 }
+
+// Runs the command directly in a PTY without tmux. The process persists across
+// WebSocket disconnections but does not support scrollback replay on reconnect.
+export class DirectSession {
+  constructor({ command, cwd }) {
+    this.command = command;
+    this.cwd = cwd || process.env.HOME || '/';
+    this.alive = false;
+    this.onExit = null;
+    this._pty = null;
+    this._clients = new Set();
+  }
+
+  async start() {
+    const [file, ...args] = this.command;
+    const env = { ...process.env, TERM: 'xterm-256color', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' };
+
+    this._pty = pty.spawn(file, args, {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: this.cwd,
+      env,
+    });
+
+    this.alive = true;
+
+    this._pty.onData(data => {
+      const buf = Buffer.from(data);
+      for (const ws of this._clients) {
+        if (ws.readyState === 1) ws.send(buf);
+      }
+    });
+
+    this._pty.onExit(() => {
+      this.alive = false;
+      for (const ws of this._clients) {
+        if (ws.readyState === 1) {
+          ws.send(Buffer.from('\r\n\x1b[31m[Session ended]\x1b[0m\r\n'));
+          ws.close();
+        }
+      }
+      this._clients.clear();
+      this.onExit?.();
+    });
+  }
+
+  async attach(ws) {
+    if (!this.alive) return false;
+    this._clients.add(ws);
+    ws.on('message', msg => this._handleInput(msg));
+    ws.on('close', () => this._clients.delete(ws));
+    return true;
+  }
+
+  _handleInput(msg) {
+    try {
+      const obj = JSON.parse(msg);
+      if (obj.type === 'input') this._pty.write(obj.data);
+      else if (obj.type === 'resize') this._pty.resize(obj.cols, obj.rows);
+    } catch {
+      this._pty.write(msg.toString());
+    }
+  }
+
+  async destroy() {
+    this.alive = false;
+    try { this._pty?.kill(); } catch {}
+    for (const ws of this._clients) {
+      if (ws.readyState === 1) ws.close();
+    }
+    this._clients.clear();
+  }
+}
