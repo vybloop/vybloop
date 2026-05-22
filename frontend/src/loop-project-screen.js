@@ -709,8 +709,16 @@ class LoopProjectScreen extends LitElement {
     this._termWs = ws;
 
     ws.onopen = () => {
+      this._termFit?.fit();
       const { cols, rows } = this._term;
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          this._termFit?.fit();
+          const { cols, rows } = this._term;
+          ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+        }
+      }, 1000);
     };
 
     ws.onmessage = ({ data }) => {
