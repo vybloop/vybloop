@@ -78,3 +78,11 @@ export function broadcastStatus(projectId, status) {
     sendEvent(res, 'status', { status });
   }
 }
+
+export function broadcastPorts(projectId, ports) {
+  const watcher = watchers.get(projectId);
+  if (!watcher) return;
+  for (const res of watcher.clients) {
+    sendEvent(res, 'ports', ports);
+  }
+}

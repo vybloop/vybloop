@@ -28,9 +28,25 @@ import {
   getFileDiff,
   TEMPLATES,
 } from './data.js';
-import { getOrCreateWatcher, broadcastStatus } from './file-watcher.js';
+import { getOrCreateWatcher, broadcastStatus, broadcastPorts } from './file-watcher.js';
 
 const execFileAsync = promisify(execFile);
+
+async function getContainerPorts(repoPath) {
+  const { stdout: idsOut } = await execFileAsync('podman', ['compose', 'ps', '-q'], { cwd: repoPath });
+  const ids = idsOut.trim().split('\n').filter(Boolean);
+  const ports = [];
+  for (const containerId of ids) {
+    try {
+      const { stdout } = await execFileAsync('podman', ['port', containerId]);
+      for (const line of stdout.trim().split('\n').filter(Boolean)) {
+        const match = line.match(/^(\d+)\/(tcp|udp)\s+->\s+[\d.]+:(\d+)$/);
+        if (match) ports.push({ containerPort: +match[1], protocol: match[2], hostPort: +match[3] });
+      }
+    } catch { /* container may have no exposed ports */ }
+  }
+  return ports;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -100,11 +116,18 @@ app.post('/api/projects/:id/run', async (req, res) => {
   } else {
     setProjectStatus(id, 'running');
     res.json({ status: 'running' });
-    execFile('podman', ['compose', 'up', '--build', '-d'], { cwd: repoPath }, (err) => {
+    execFile('podman', ['compose', 'up', '--build', '-d'], { cwd: repoPath }, async (err) => {
       if (err) {
         console.error(`[compose] up failed for ${id}:`, err.message);
         setProjectStatus(id, 'error');
         broadcastStatus(id, 'error');
+      } else {
+        try {
+          const ports = await getContainerPorts(repoPath);
+          broadcastPorts(id, ports);
+        } catch (e) {
+          console.error(`[compose] port detection failed for ${id}:`, e.message);
+        }
       }
     });
   }
@@ -113,21 +136,8 @@ app.post('/api/projects/:id/run', async (req, res) => {
 app.get('/api/projects/:id/ports', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
-  const repoPath = `/data/${req.params.id}/git`;
   try {
-    const { stdout: idsOut } = await execFileAsync('podman', ['compose', 'ps', '-q'], { cwd: repoPath });
-    const ids = idsOut.trim().split('\n').filter(Boolean);
-    const ports = [];
-    for (const containerId of ids) {
-      try {
-        const { stdout } = await execFileAsync('podman', ['port', containerId]);
-        for (const line of stdout.trim().split('\n').filter(Boolean)) {
-          const match = line.match(/^(\d+)\/(tcp|udp)\s+->\s+[\d.]+:(\d+)$/);
-          if (match) ports.push({ containerPort: +match[1], protocol: match[2], hostPort: +match[3] });
-        }
-      } catch { /* container may have no exposed ports */ }
-    }
-    res.json(ports);
+    res.json(await getContainerPorts(`/data/${req.params.id}/git`));
   } catch {
     res.json([]);
   }

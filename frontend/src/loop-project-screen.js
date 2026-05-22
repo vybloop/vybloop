@@ -204,6 +204,12 @@ class LoopProjectScreen extends LitElement {
       background: var(--add);
       animation: pulseDot 2s ease-in-out infinite;
     }
+    .server-dot.starting {
+      background: oklch(0.85 0.18 90);
+    }
+    .server-bar-starting {
+      cursor: default;
+    }
     .server-link {
       font-family: var(--font-mono);
       font-size: 11px;
@@ -1103,9 +1109,11 @@ class LoopProjectScreen extends LitElement {
       // Connect the terminal once the project arrives (terminal is already initialized)
       if (this._term && !this._termWs) this._connectWs();
     }
-    if (changed.has('_running')) {
-      if (this._running) this._fetchPorts();
-      else this._ports = [];
+    if (changed.has('project') && this.project?.status === 'running') {
+      this._fetchPorts();
+    }
+    if (changed.has('_running') && !this._running) {
+      this._ports = [];
     }
     if (changed.has('_activeTab')) {
       if (this._activeTab === 'agent') {
@@ -1294,6 +1302,7 @@ class LoopProjectScreen extends LitElement {
     this._sse.addEventListener('changes', (e) => { this._files = JSON.parse(e.data); });
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
     this._sse.addEventListener('status', (e) => { this._running = JSON.parse(e.data).status === 'running'; });
+    this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
   }
 
   _isFilePath(tab) {
@@ -1862,19 +1871,28 @@ class LoopProjectScreen extends LitElement {
               <button class="chevron-btn">${iconChevronDown}</button>
             </div>
             ${this._running ? html`
-              <a class="server-bar"
-                href=${this._ports.length ? `http://${window.location.hostname}:${this._ports[0].hostPort}` : '#'}
-                target="_blank" rel="noopener noreferrer">
-                <div class="server-info">
-                  <span class="server-dot"></span>
-                  <span>dev server</span>
-                  ${this._ports.length ? html`
+              ${this._ports.length ? html`
+                <a class="server-bar"
+                  href="http://${window.location.hostname}:${this._ports[0].hostPort}"
+                  target="_blank" rel="noopener noreferrer">
+                  <div class="server-info">
+                    <span class="server-dot"></span>
+                    <span>dev server</span>
                     <span>·</span>
                     <span class="server-link">${window.location.hostname}:${this._ports[0].hostPort}</span>
-                  ` : ''}
+                  </div>
+                  <span class="server-bar-icon">${iconExternal}</span>
+                </a>
+              ` : html`
+                <div class="server-bar server-bar-starting">
+                  <div class="server-info">
+                    <span class="server-dot starting"></span>
+                    <span>dev server</span>
+                    <span>·</span>
+                    <span>starting…</span>
+                  </div>
                 </div>
-                <span class="server-bar-icon">${iconExternal}</span>
-              </a>
+              `}
             ` : ''}
           ` : ''}
         </div>
