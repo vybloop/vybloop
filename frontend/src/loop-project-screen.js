@@ -534,54 +534,6 @@ class LoopProjectScreen extends LitElement {
       margin-left: 2px;
     }
 
-    /* Terminal footer */
-    .terminal-footer {
-      border-top: 1px solid var(--line-soft);
-      padding: 8px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: var(--bg-1);
-      flex-shrink: 0;
-    }
-    .shortcuts {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-    }
-    .shortcut-hint {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 11px;
-      color: var(--fg-3);
-    }
-    .kbd {
-      background: var(--bg-3);
-      border: 1px solid var(--line);
-      border-radius: 4px;
-      padding: 1px 5px;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      color: var(--fg-2);
-    }
-    .footer-right {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 11px;
-      color: var(--fg-3);
-    }
-    .footer-template {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-    .context-size {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--fg-3);
-    }
     #xterm-container {
       flex: 1;
       min-height: 0;
@@ -604,13 +556,6 @@ class LoopProjectScreen extends LitElement {
         padding: 10px 10px;
         font-size: 12px;
       }
-      .terminal-footer {
-        padding: 6px 10px;
-        font-size: 10px;
-      }
-      .shortcuts {
-        display: none;
-      }
       .sidebar.as-tab .sidebar-top {
         padding: 10px;
       }
@@ -618,12 +563,6 @@ class LoopProjectScreen extends LitElement {
         padding: 10px;
       }
     }
-    @media (pointer: coarse) {
-      .shortcuts {
-        display: none;
-      }
-    }
-
     /* Mobile input FAB + bar */
     :host {
       position: relative;
@@ -1239,20 +1178,6 @@ class LoopProjectScreen extends LitElement {
           ${this._activeTab === 'shell' ? this._renderShellPlaceholder() : ''}
           ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
 
-          <div class="terminal-footer">
-            <div class="shortcuts">
-              <span class="shortcut-hint"><span class="kbd">${_modKey} ↵</span> send</span>
-              <span class="shortcut-hint"><span class="kbd">${_modKey} K</span> clear</span>
-              <span class="shortcut-hint"><span class="kbd">${_modKey} .</span> interrupt</span>
-            </div>
-            <div class="footer-right">
-              <span class="footer-template">
-                ${iconSparkle}
-                ${this.project.template || 'blank'}
-              </span>
-              <span class="context-size">~12k tokens</span>
-            </div>
-          </div>
         </div>
       </div>
 
