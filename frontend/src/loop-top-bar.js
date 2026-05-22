@@ -10,6 +10,7 @@ class LoopTopBar extends LitElement {
   static styles = css`
     :host {
       display: block;
+      flex-shrink: 0;
     }
     .topbar {
       display: flex;

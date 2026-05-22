@@ -19,6 +19,7 @@ class LoopProjectScreen extends LitElement {
     _committing: { state: true },
     _committed: { state: true },
     _loading: { state: true },
+    _narrow: { state: true },
   };
 
   static styles = [css`
@@ -26,12 +27,14 @@ class LoopProjectScreen extends LitElement {
       display: flex;
       flex-direction: column;
       flex: 1;
+      min-height: 0;
       overflow: hidden;
       background: var(--bg-0);
     }
     .layout {
       display: flex;
       flex: 1;
+      min-height: 0;
       overflow: hidden;
     }
 
@@ -43,7 +46,13 @@ class LoopProjectScreen extends LitElement {
       border-right: 1px solid var(--line-soft);
       display: flex;
       flex-direction: column;
+      min-height: 0;
       overflow: hidden;
+    }
+    .sidebar.as-tab {
+      width: 100%;
+      border-right: none;
+      flex: 1;
     }
     .sidebar-top {
       padding: 12px;
@@ -149,6 +158,7 @@ class LoopProjectScreen extends LitElement {
     /* Changes section */
     .changes-section {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
       padding: 0;
     }
@@ -344,6 +354,8 @@ class LoopProjectScreen extends LitElement {
       flex: 1;
       display: flex;
       flex-direction: column;
+      min-width: 0;
+      min-height: 0;
       overflow: hidden;
       background: var(--bg-0);
     }
@@ -355,10 +367,20 @@ class LoopProjectScreen extends LitElement {
       background: var(--bg-1);
       flex-shrink: 0;
       justify-content: space-between;
+      gap: 8px;
     }
     .tabs {
       display: flex;
       align-items: center;
+      min-width: 0;
+      flex: 1;
+    }
+    .tab-logo {
+      display: none;
+      align-items: center;
+      padding: 0 10px 0 4px;
+      cursor: pointer;
+      flex-shrink: 0;
     }
     .tab {
       padding: 12px 14px;
@@ -563,6 +585,33 @@ class LoopProjectScreen extends LitElement {
     #xterm-container .xterm-screen {
       height: 100% !important;
     }
+
+    /* Narrow / mobile layout */
+    @media (max-width: 768px) {
+      .tab-bar {
+        padding: 0 4px 0 0;
+      }
+      .tab-logo {
+        display: flex;
+      }
+      .tab {
+        padding: 10px 10px;
+        font-size: 12px;
+      }
+      .terminal-footer {
+        padding: 6px 10px;
+        font-size: 10px;
+      }
+      .shortcuts {
+        display: none;
+      }
+      .sidebar.as-tab .sidebar-top {
+        padding: 10px;
+      }
+      .sidebar.as-tab .commit-box {
+        padding: 10px;
+      }
+    }
   `, unsafeCSS(xtermCss)];
 
   constructor() {
@@ -578,6 +627,17 @@ class LoopProjectScreen extends LitElement {
     this._term = null;
     this._termFit = null;
     this._termWs = null;
+    this._mq = window.matchMedia('(max-width: 768px)');
+    this._narrow = this._mq.matches;
+    this._mqHandler = (e) => {
+      this._narrow = e.matches;
+      if (!e.matches && this._activeTab === 'changes') this._activeTab = 'agent';
+    };
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._mq.addEventListener('change', this._mqHandler);
   }
 
   firstUpdated() {
@@ -599,6 +659,7 @@ class LoopProjectScreen extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._mq?.removeEventListener('change', this._mqHandler);
     this._termDataDisposable?.dispose();
     this._termResizeDisposable?.dispose();
     this._termWs?.close();
@@ -799,14 +860,14 @@ class LoopProjectScreen extends LitElement {
     `;
   }
 
-  _renderSidebar() {
+  _renderSidebar(asTab = false) {
     const staged = this._staged();
     const unstaged = this._unstaged();
     const allFiles = [...staged, ...unstaged];
     const branch = this.project?.branch || 'main';
 
     return html`
-      <div class="sidebar">
+      <div class="sidebar ${asTab ? 'as-tab' : ''}">
         <div class="sidebar-top">
           <div class="run-row">
             <button class="run-btn ${this._running ? 'running' : 'idle'}" @click=${this._toggleRun}>
@@ -977,7 +1038,11 @@ class LoopProjectScreen extends LitElement {
   render() {
     if (!this.project) return html`<div style="padding:40px;color:var(--fg-3)">Loading…</div>`;
 
+    const tabs = this._narrow ? ['agent', 'logs', 'shell', 'changes'] : ['agent', 'logs', 'shell'];
+    const changeCount = this._files.length;
+
     return html`
+      ${this._narrow ? '' : html`
       <loop-top-bar>
         <div slot="breadcrumb">
           <button
@@ -1000,19 +1065,26 @@ class LoopProjectScreen extends LitElement {
           </span>
         </div>
       </loop-top-bar>
+      `}
 
       <div class="layout">
-        ${this._renderSidebar()}
+        ${this._narrow ? '' : this._renderSidebar()}
 
         <div class="main-area">
           <div class="tab-bar">
+            <div class="tab-logo" @click=${this._back} title="Back to projects">
+              <svg width="22" height="18" viewBox="0 0 26 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M13 10C13 7.5 11 4 7.5 4C4 4 2 6.5 2 9.5C2 13.5 5 16 8 16C11 16 13 13.5 13 10Z" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                <path d="M13 10C13 7.5 15 4 18.5 4C22 4 24 6.5 24 9.5C24 13.5 21 16 18 16C15 16 13 13.5 13 10Z" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              </svg>
+            </div>
             <div class="tabs">
-              ${['agent', 'logs', 'shell'].map(tab => html`
+              ${tabs.map(tab => html`
                 <div
                   class="tab ${this._activeTab === tab ? 'active' : ''}"
                   @click=${() => this._activeTab = tab}
                 >
-                  ${tab}
+                  ${tab}${tab === 'changes' && changeCount > 0 ? html` <span class="count-badge">${changeCount}</span>` : ''}
                 </div>
               `)}
             </div>
@@ -1027,6 +1099,7 @@ class LoopProjectScreen extends LitElement {
           </div>
           ${this._activeTab === 'logs' ? this._renderLogsPlaceholder() : ''}
           ${this._activeTab === 'shell' ? this._renderShellPlaceholder() : ''}
+          ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
 
           <div class="terminal-footer">
             <div class="shortcuts">
