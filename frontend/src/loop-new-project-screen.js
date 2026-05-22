@@ -25,6 +25,12 @@ class LoopNewProjectScreen extends LitElement {
     _templateOpen: { state: true },
     _submitting: { state: true },
     _error: { state: true },
+    _step: { state: true },
+    _githubInfo: { state: true },
+    _githubRepoName: { state: true },
+    _githubPrivate: { state: true },
+    _githubCreating: { state: true },
+    _githubError: { state: true },
   };
 
   static styles = css`
@@ -258,6 +264,41 @@ class LoopNewProjectScreen extends LitElement {
       background: var(--line-soft);
       margin: 20px 0;
     }
+    .github-prompt {
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 18px;
+    }
+    .github-prompt-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--fg-0);
+      margin-bottom: 6px;
+    }
+    .github-prompt-sub {
+      font-size: 13px;
+      color: var(--fg-2);
+      margin-bottom: 18px;
+    }
+    .github-username {
+      color: var(--accent);
+    }
+    .radio-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    .radio-option {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--fg-1);
+      cursor: pointer;
+    }
+    .radio-option input { cursor: pointer; accent-color: var(--accent); }
   `;
 
   constructor() {
@@ -271,6 +312,12 @@ class LoopNewProjectScreen extends LitElement {
     this._templateOpen = false;
     this._submitting = false;
     this._error = '';
+    this._step = 'form';
+    this._githubInfo = null;
+    this._githubRepoName = '';
+    this._githubPrivate = false;
+    this._githubCreating = false;
+    this._githubError = '';
   }
 
   _deriveNameFromRepo(url) {
@@ -304,6 +351,50 @@ class LoopNewProjectScreen extends LitElement {
       return;
     }
     this._error = '';
+
+    if (!this._repo.trim()) {
+      this._submitting = true;
+      try {
+        const res = await fetch('/api/github/status');
+        const info = await res.json();
+        this._githubInfo = info;
+        if (info.available) {
+          this._githubRepoName = this._name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+          this._step = 'github-prompt';
+          return;
+        }
+      } catch {
+        // If check fails, proceed without GitHub prompt
+      } finally {
+        this._submitting = false;
+      }
+    }
+
+    await this._createProject(this._repo.trim());
+  }
+
+  async _createGithubRepo() {
+    this._githubCreating = true;
+    this._githubError = '';
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: this._githubRepoName.trim(),
+          private: this._githubPrivate,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create repository');
+      await this._createProject(data.url);
+    } catch (err) {
+      this._githubError = err.message;
+      this._githubCreating = false;
+    }
+  }
+
+  async _createProject(repoUrl) {
     this._submitting = true;
     try {
       const res = await fetch('/api/projects', {
@@ -311,7 +402,7 @@ class LoopNewProjectScreen extends LitElement {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: this._name.trim(),
-          repo: this._repo.trim(),
+          repo: repoUrl,
           branch: this._branch.trim() || 'main',
           template: this._template,
           setupCmd: this._setupCmd.trim(),
@@ -329,6 +420,7 @@ class LoopNewProjectScreen extends LitElement {
       }));
     } catch (err) {
       this._error = err.message;
+      this._step = 'form';
     } finally {
       this._submitting = false;
     }
@@ -338,107 +430,185 @@ class LoopNewProjectScreen extends LitElement {
     this.dispatchEvent(new CustomEvent('navigate-home', { bubbles: true, composed: true }));
   }
 
+  _renderForm() {
+    return html`
+      <button class="back-link" @click=${this._cancel}>
+        ${iconArrowLeft}
+        Back to projects
+      </button>
+      <div class="form-title">New project</div>
+      <div class="form-subtitle">Set up a new project to start vibe-coding with Claude.</div>
+
+      <div class="field">
+        <label>Project name <span class="label-hint">(required)</span></label>
+        <input
+          type="text"
+          placeholder="my-project"
+          .value=${this._name}
+          @input=${e => this._name = e.target.value}
+        />
+      </div>
+
+      <div class="field">
+        <label>Git repository URL <span class="label-hint">(optional)</span></label>
+        <input
+          type="url"
+          placeholder="https://github.com/user/my-project.git"
+          .value=${this._repo}
+          @input=${this._onRepoInput}
+        />
+      </div>
+
+      <div class="field">
+        <label>Template</label>
+        <div class="dropdown-wrap">
+          <button
+            class="dropdown-trigger ${this._templateOpen ? 'open' : ''}"
+            @click=${() => this._templateOpen = !this._templateOpen}
+          >
+            <span>${this._templateLabel()}</span>
+            <span class="dropdown-chevron ${this._templateOpen ? 'open' : ''}">${iconChevronDown}</span>
+          </button>
+          ${this._templateOpen ? html`
+            <div class="dropdown-menu">
+              ${TEMPLATES.map(t => html`
+                <div
+                  class="dropdown-item ${this._template === t.id ? 'selected' : ''}"
+                  @click=${() => this._selectTemplate(t.id)}
+                >
+                  <span>${t.name}</span>
+                  ${this._template === t.id ? html`<span class="dropdown-check">${iconCheck}</span>` : ''}
+                </div>
+              `)}
+            </div>
+          ` : ''}
+        </div>
+      </div>
+
+      <button
+        class="advanced-toggle ${this._showAdvanced ? 'open' : ''}"
+        @click=${() => this._showAdvanced = !this._showAdvanced}
+      >
+        ${iconChevronDown}
+        Advanced options
+      </button>
+
+      ${this._showAdvanced ? html`
+        <div class="advanced-fields">
+          <div class="field">
+            <label>Branch</label>
+            <input
+              type="text"
+              placeholder="main"
+              .value=${this._branch}
+              @input=${e => this._branch = e.target.value}
+            />
+          </div>
+          <div class="field">
+            <label>Setup command <span class="label-hint">(run after clone)</span></label>
+            <input
+              type="text"
+              placeholder="npm install"
+              .value=${this._setupCmd}
+              @input=${e => this._setupCmd = e.target.value}
+            />
+          </div>
+        </div>
+      ` : ''}
+
+      ${this._error ? html`<div class="error-msg">${this._error}</div>` : ''}
+
+      <div class="form-actions">
+        <button
+          class="btn-primary"
+          ?disabled=${this._submitting || !this._name.trim()}
+          @click=${this._submit}
+        >
+          ${this._submitting ? 'Checking…' : 'Create project'}
+        </button>
+        <button class="btn-ghost" @click=${this._cancel}>Cancel</button>
+      </div>
+    `;
+  }
+
+  _renderGithubPrompt() {
+    const busy = this._githubCreating || this._submitting;
+    return html`
+      <button class="back-link" @click=${() => { this._step = 'form'; this._githubError = ''; }}>
+        ${iconArrowLeft}
+        Back
+      </button>
+      <div class="form-title">Create GitHub repository?</div>
+      <div class="form-subtitle">
+        A GitHub token was found for
+        <span class="github-username">@${this._githubInfo?.username}</span>.
+        Would you like to create a new repository for this project?
+      </div>
+
+      <div class="github-prompt">
+        <div class="field">
+          <label>Repository name</label>
+          <input
+            type="text"
+            .value=${this._githubRepoName}
+            @input=${e => this._githubRepoName = e.target.value}
+            ?disabled=${busy}
+          />
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label>Visibility</label>
+          <div class="radio-group">
+            <label class="radio-option">
+              <input
+                type="radio"
+                name="visibility"
+                .checked=${!this._githubPrivate}
+                @change=${() => this._githubPrivate = false}
+                ?disabled=${busy}
+              />
+              Public
+            </label>
+            <label class="radio-option">
+              <input
+                type="radio"
+                name="visibility"
+                .checked=${this._githubPrivate}
+                @change=${() => this._githubPrivate = true}
+                ?disabled=${busy}
+              />
+              Private
+            </label>
+          </div>
+        </div>
+      </div>
+
+      ${this._githubError ? html`<div class="error-msg">${this._githubError}</div>` : ''}
+
+      <div class="form-actions">
+        <button
+          class="btn-primary"
+          ?disabled=${busy || !this._githubRepoName.trim()}
+          @click=${this._createGithubRepo}
+        >
+          ${this._githubCreating ? 'Creating repo…' : this._submitting ? 'Creating project…' : 'Create repository'}
+        </button>
+        <button
+          class="btn-ghost"
+          ?disabled=${busy}
+          @click=${() => this._createProject('')}
+        >
+          Skip
+        </button>
+      </div>
+    `;
+  }
+
   render() {
     return html`
       <loop-top-bar></loop-top-bar>
       <div class="content">
         <div class="form-card">
-          <button class="back-link" @click=${this._cancel}>
-            ${iconArrowLeft}
-            Back to projects
-          </button>
-          <div class="form-title">New project</div>
-          <div class="form-subtitle">Set up a new project to start vibe-coding with Claude.</div>
-
-          <div class="field">
-            <label>Project name <span class="label-hint">(required)</span></label>
-            <input
-              type="text"
-              placeholder="my-project"
-              .value=${this._name}
-              @input=${e => this._name = e.target.value}
-            />
-          </div>
-
-          <div class="field">
-            <label>Git repository URL <span class="label-hint">(optional)</span></label>
-            <input
-              type="url"
-              placeholder="https://github.com/user/my-project.git"
-              .value=${this._repo}
-              @input=${this._onRepoInput}
-            />
-          </div>
-
-          <div class="field">
-            <label>Template</label>
-            <div class="dropdown-wrap">
-              <button
-                class="dropdown-trigger ${this._templateOpen ? 'open' : ''}"
-                @click=${() => this._templateOpen = !this._templateOpen}
-              >
-                <span>${this._templateLabel()}</span>
-                <span class="dropdown-chevron ${this._templateOpen ? 'open' : ''}">${iconChevronDown}</span>
-              </button>
-              ${this._templateOpen ? html`
-                <div class="dropdown-menu">
-                  ${TEMPLATES.map(t => html`
-                    <div
-                      class="dropdown-item ${this._template === t.id ? 'selected' : ''}"
-                      @click=${() => this._selectTemplate(t.id)}
-                    >
-                      <span>${t.name}</span>
-                      ${this._template === t.id ? html`<span class="dropdown-check">${iconCheck}</span>` : ''}
-                    </div>
-                  `)}
-                </div>
-              ` : ''}
-            </div>
-          </div>
-
-          <button
-            class="advanced-toggle ${this._showAdvanced ? 'open' : ''}"
-            @click=${() => this._showAdvanced = !this._showAdvanced}
-          >
-            ${iconChevronDown}
-            Advanced options
-          </button>
-
-          ${this._showAdvanced ? html`
-            <div class="advanced-fields">
-              <div class="field">
-                <label>Branch</label>
-                <input
-                  type="text"
-                  placeholder="main"
-                  .value=${this._branch}
-                  @input=${e => this._branch = e.target.value}
-                />
-              </div>
-              <div class="field">
-                <label>Setup command <span class="label-hint">(run after clone)</span></label>
-                <input
-                  type="text"
-                  placeholder="npm install"
-                  .value=${this._setupCmd}
-                  @input=${e => this._setupCmd = e.target.value}
-                />
-              </div>
-            </div>
-          ` : ''}
-
-          ${this._error ? html`<div class="error-msg">${this._error}</div>` : ''}
-
-          <div class="form-actions">
-            <button
-              class="btn-primary"
-              ?disabled=${this._submitting || !this._name.trim()}
-              @click=${this._submit}
-            >
-              ${this._submitting ? 'Creating…' : 'Create project'}
-            </button>
-            <button class="btn-ghost" @click=${this._cancel}>Cancel</button>
-          </div>
+          ${this._step === 'github-prompt' ? this._renderGithubPrompt() : this._renderForm()}
         </div>
       </div>
     `;

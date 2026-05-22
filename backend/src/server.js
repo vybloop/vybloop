@@ -90,6 +90,44 @@ app.get('/api/templates', (req, res) => {
   res.json(TEMPLATES);
 });
 
+app.get('/api/github/status', async (req, res) => {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return res.json({ available: false });
+  try {
+    const resp = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'loop-app' },
+    });
+    if (!resp.ok) return res.json({ available: false });
+    const user = await resp.json();
+    res.json({ available: true, username: user.login });
+  } catch {
+    res.json({ available: false });
+  }
+});
+
+app.post('/api/github/repos', async (req, res) => {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return res.status(400).json({ error: 'No GitHub token configured' });
+  const { name, private: isPrivate = false } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  try {
+    const resp = await fetch('https://api.github.com/user/repos', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'loop-app',
+      },
+      body: JSON.stringify({ name, private: isPrivate, auto_init: true }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) return res.status(resp.status).json({ error: data.message || 'Failed to create repository' });
+    res.json({ url: data.clone_url, htmlUrl: data.html_url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/config', (req, res) => {
   res.json(getConfig());
 });
