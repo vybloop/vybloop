@@ -8,8 +8,3 @@ After completing a task, delete it from this file.
 * Need proper SPA style nav bar updates
 
 * Need to update all mac style shortcut hints like ⌘K to be correct on windows and mobile. If we can detect mobile we should just hide those hints. Additionally, the hint for "Search projects..." is not correctly aligned in the search box, it's currently on the right side of the box but with a big empty space on the right.
-
-
-
-
-I'm seeing a lot of error messages like `loop-1  | time="2026-05-22T04:02:25Z" level=error msg="Refreshing container 164a520f757b50852f759894debe6f43c93e1c36dd0e8ff82161165c156bc31a: acquiring lock 0 for container 164a520f757b50852f759894debe6f43c93e1c36dd0e8ff82161165c156bc31a: file exists"`. These show up on pretty much every startup. Are we leaving around some old state from previous runs or something?
