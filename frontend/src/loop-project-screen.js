@@ -69,9 +69,8 @@ class LoopProjectScreen extends LitElement {
     _filesOpen: { state: true },
     _fileTree: { state: true },
     _filesLoading: { state: true },
-    _selectedFile: { state: true },
-    _fileMtime: { state: true },
-    _fileLoading: { state: true },
+    _openFiles: { state: true },
+    _dialog: { state: true },
   };
 
   static styles = [css`
@@ -792,6 +791,111 @@ class LoopProjectScreen extends LitElement {
       color: var(--accent);
     }
 
+    /* File tabs */
+    .tabs {
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .file-tab {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+      max-width: 160px;
+    }
+    .file-tab-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .file-tab-dirty {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--fg-2);
+      flex-shrink: 0;
+    }
+    .tab.active .file-tab-dirty { background: var(--accent); }
+    .tab-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 3px;
+      color: var(--fg-3);
+      flex-shrink: 0;
+      transition: background 0.1s, color 0.1s;
+    }
+    .tab-close:hover { background: var(--bg-3); color: var(--fg-1); }
+
+    /* Dialog */
+    .dialog-overlay {
+      position: absolute;
+      inset: 0;
+      background: oklch(0 0 0 / 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .dialog-box {
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px;
+      width: 320px;
+      max-width: calc(100vw - 32px);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 8px 32px oklch(0 0 0 / 0.4);
+    }
+    .dialog-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--fg-0);
+    }
+    .dialog-body {
+      font-size: 13px;
+      color: var(--fg-2);
+      line-height: 1.5;
+    }
+    .dialog-body strong { color: var(--fg-1); }
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .dialog-btn {
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      border: 1px solid var(--line-soft);
+      background: var(--bg-2);
+      color: var(--fg-1);
+      transition: background 0.1s;
+    }
+    .dialog-btn:hover { background: var(--bg-3); }
+    .dialog-btn-primary {
+      background: var(--accent);
+      color: var(--accent-fg);
+      border-color: transparent;
+    }
+    .dialog-btn-primary:hover { opacity: 0.85; background: var(--accent); }
+    .dialog-btn-danger {
+      background: oklch(0.72 0.18 25 / 0.15);
+      color: var(--del);
+      border-color: oklch(0.72 0.18 25 / 0.3);
+    }
+    .dialog-btn-danger:hover { background: oklch(0.72 0.18 25 / 0.25); }
+
     /* Narrow / mobile layout */
     @media (max-width: 768px) {
       .tab-bar {
@@ -924,12 +1028,14 @@ class LoopProjectScreen extends LitElement {
     this._fileTree = null;
     this._filesLoading = false;
     this._expandedDirs = new Set();
-    this._selectedFile = null;
-    this._fileMtime = null;
-    this._fileLoading = false;
+    this._openFiles = [];   // [{ path, dirty }]
+    this._dialog = null;    // null | { type, ...data }
+    this._fileModels = new Map();       // path -> monaco.ITextModel
+    this._fileMtimes = new Map();       // path -> server mtime
+    this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
+    this._fileChangeListeners = new Map(); // path -> IDisposable
     this._monacoEditor = null;
     this._pollInterval = null;
-    this._pendingFileContent = null;
     this._styleObserver = null;
     this._mqHandler = (e) => {
       this._narrow = e.matches;
@@ -961,12 +1067,15 @@ class LoopProjectScreen extends LitElement {
       if (this._activeTab === 'changes') {
         this._inputOpen = false;
       }
-      if (this._activeTab === 'file') {
+      if (this._isFilePath(this._activeTab)) {
         this._ensureMonaco();
+        if (this._monacoEditor) {
+          this._monacoEditor.setModel(this._fileModels.get(this._activeTab) ?? null);
+          requestAnimationFrame(() => this._monacoEditor?.layout());
+        }
         this._startPolling(true);
       } else {
         this._stopPolling();
-        // Keep monaco container showing so layout is preserved; just stop polling
       }
     }
     if (changed.has('_inputOpen') && this._inputOpen) {
@@ -988,6 +1097,10 @@ class LoopProjectScreen extends LitElement {
     this._termWs = null;
     clearInterval(this._pollInterval);
     this._pollInterval = null;
+    this._fileChangeListeners.forEach(d => d.dispose());
+    this._fileChangeListeners.clear();
+    this._fileModels.forEach(m => m.dispose());
+    this._fileModels.clear();
     this._monacoEditor?.dispose();
     this._monacoEditor = null;
     this._styleObserver?.disconnect();
@@ -1115,28 +1228,104 @@ class LoopProjectScreen extends LitElement {
     }
   }
 
+  _isFilePath(tab) {
+    return !['agent', 'logs', 'shell', 'changes'].includes(tab);
+  }
+
   async _openFile(filePath) {
-    this._selectedFile = filePath;
-    this._activeTab = 'file';
-    this._fileLoading = true;
-    this._pendingFileContent = null;
+    // If already open, just switch to it
+    if (this._fileModels.has(filePath)) {
+      this._activeTab = filePath;
+      return;
+    }
+    // Add tab immediately so the user sees it
+    this._openFiles = [...this._openFiles, { path: filePath, dirty: false }];
+    this._activeTab = filePath;
+
     try {
       const res = await fetch(`/api/projects/${this.project.id}/file?path=${encodeURIComponent(filePath)}`);
-      if (res.ok) {
-        const { content, mtime } = await res.json();
-        this._fileMtime = mtime;
-        // Monaco container may not be visible yet if this is the first open.
-        // Store content and let updated() apply it after render.
-        if (this._monacoEditor) {
-          this._setMonacoContent(content, filePath);
-        } else {
-          this._pendingFileContent = { content, filePath };
+      if (!res.ok) {
+        this._openFiles = this._openFiles.filter(f => f.path !== filePath);
+        if (this._activeTab === filePath) this._activeTab = this._openFiles.at(-1)?.path ?? 'agent';
+        return;
+      }
+      const { content, mtime } = await res.json();
+      this._fileMtimes.set(filePath, mtime);
+
+      const filename = filePath.split('/').pop() ?? filePath;
+      const model = monaco.editor.createModel(content, detectLanguage(filename));
+      this._fileModels.set(filePath, model);
+      this._fileCleanVersions.set(filePath, model.getAlternativeVersionId());
+
+      const listener = model.onDidChangeContent(() => {
+        const isDirty = model.getAlternativeVersionId() !== this._fileCleanVersions.get(filePath);
+        const entry = this._openFiles.find(f => f.path === filePath);
+        if (entry && entry.dirty !== isDirty) {
+          this._openFiles = this._openFiles.map(f => f.path === filePath ? { ...f, dirty: isDirty } : f);
         }
+      });
+      this._fileChangeListeners.set(filePath, listener);
+
+      // Set model in editor if this is still the active file
+      if (this._activeTab === filePath && this._monacoEditor) {
+        this._monacoEditor.setModel(model);
+        requestAnimationFrame(() => this._monacoEditor?.layout());
       }
     } catch (e) {
       console.error('Failed to load file', e);
-    } finally {
-      this._fileLoading = false;
+    }
+  }
+
+  _closeFile(path, e) {
+    e?.stopPropagation();
+    const entry = this._openFiles.find(f => f.path === path);
+    if (entry?.dirty) {
+      this._dialog = { type: 'close-dirty', path };
+    } else {
+      this._confirmClose(path);
+    }
+  }
+
+  _confirmClose(path) {
+    this._fileChangeListeners.get(path)?.dispose();
+    this._fileChangeListeners.delete(path);
+    this._fileModels.get(path)?.dispose();
+    this._fileModels.delete(path);
+    this._fileMtimes.delete(path);
+    this._fileCleanVersions.delete(path);
+    const remaining = this._openFiles.filter(f => f.path !== path);
+    this._openFiles = remaining;
+    if (this._activeTab === path) {
+      this._activeTab = remaining.length > 0 ? remaining.at(-1).path : 'agent';
+    }
+    this._dialog = null;
+  }
+
+  async _saveFile(path, force = false) {
+    const model = this._fileModels.get(path);
+    if (!model) return;
+    const content = model.getValue();
+    const mtime = this._fileMtimes.get(path) ?? 0;
+    try {
+      const res = await fetch(
+        `/api/projects/${this.project.id}/file?path=${encodeURIComponent(path)}`,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content, mtime, force }) }
+      );
+      if (res.status === 409) {
+        const { mtime: externalMtime } = await res.json();
+        this._dialog = { type: 'save-conflict', path, externalMtime };
+        return;
+      }
+      if (res.ok) {
+        const { mtime: newMtime } = await res.json();
+        this._fileMtimes.set(path, newMtime);
+        this._fileCleanVersions.set(path, model.getAlternativeVersionId());
+        this._openFiles = this._openFiles.map(f => f.path === path ? { ...f, dirty: false } : f);
+        this._dialog = null;
+      }
+    } catch (e) {
+      console.error('Failed to save file', e);
     }
   }
 
@@ -1145,17 +1334,10 @@ class LoopProjectScreen extends LitElement {
     if (!container) return;
     if (this._monacoEditor) {
       requestAnimationFrame(() => this._monacoEditor.layout());
-      // Apply any content that arrived before Monaco was ready
-      if (this._pendingFileContent) {
-        this._setMonacoContent(this._pendingFileContent.content, this._pendingFileContent.filePath);
-        this._pendingFileContent = null;
-      }
       return;
     }
     this._monacoEditor = monaco.editor.create(container, {
-      value: '',
-      language: 'plaintext',
-      readOnly: true,
+      model: null,
       theme: 'vs-dark',
       fontSize: 13,
       fontFamily: '"Cascadia Code", ui-monospace, monospace',
@@ -1168,11 +1350,11 @@ class LoopProjectScreen extends LitElement {
       smoothScrolling: true,
     });
     new ResizeObserver(() => this._monacoEditor?.layout()).observe(container);
+    this._monacoEditor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+      () => { if (this._isFilePath(this._activeTab)) this._saveFile(this._activeTab); }
+    );
     this._mirrorMonacoStyles();
-    if (this._pendingFileContent) {
-      this._setMonacoContent(this._pendingFileContent.content, this._pendingFileContent.filePath);
-      this._pendingFileContent = null;
-    }
   }
 
   // Monaco injects <style> into document.head at runtime (theme tokens etc).
@@ -1180,38 +1362,19 @@ class LoopProjectScreen extends LitElement {
   _mirrorMonacoStyles() {
     const root = this.shadowRoot;
     if (!root || this._styleObserver) return;
-
     const adopt = (node) => {
-      if (node.nodeType !== Node.ELEMENT_NODE) return;
-      if (node.tagName !== 'STYLE') return;
+      if (node.nodeType !== Node.ELEMENT_NODE || node.tagName !== 'STYLE') return;
       if (!node.textContent?.includes('.monaco-')) return;
       const clone = node.cloneNode(true);
       root.appendChild(clone);
       new MutationObserver(() => { clone.textContent = node.textContent; })
         .observe(node, { childList: true, characterData: true, subtree: true });
     };
-
-    // Adopt any Monaco styles already present
     document.head.querySelectorAll('style').forEach(adopt);
-
     this._styleObserver = new MutationObserver((mutations) => {
       for (const m of mutations) m.addedNodes.forEach(adopt);
     });
     this._styleObserver.observe(document.head, { childList: true });
-  }
-
-  _setMonacoContent(content, filePath) {
-    if (!this._monacoEditor) return;
-    const filename = filePath.split('/').pop() ?? filePath;
-    const language = detectLanguage(filename);
-    const model = this._monacoEditor.getModel();
-    if (model) {
-      monaco.editor.setModelLanguage(model, language);
-      model.setValue(content);
-    } else {
-      const newModel = monaco.editor.createModel(content, language);
-      this._monacoEditor.setModel(newModel);
-    }
   }
 
   _startPolling(immediate = false) {
@@ -1226,18 +1389,60 @@ class LoopProjectScreen extends LitElement {
   }
 
   async _pollFile() {
-    if (!this.project || !this._selectedFile) return;
+    const path = this._isFilePath(this._activeTab) ? this._activeTab : null;
+    if (!this.project || !path) return;
     try {
-      const res = await fetch(`/api/projects/${this.project.id}/file?path=${encodeURIComponent(this._selectedFile)}`);
+      const res = await fetch(`/api/projects/${this.project.id}/file?path=${encodeURIComponent(path)}`);
       if (!res.ok) return;
       const { content, mtime } = await res.json();
-      if (mtime !== this._fileMtime) {
-        this._fileMtime = mtime;
-        this._setMonacoContent(content, this._selectedFile);
+      if (mtime === this._fileMtimes.get(path)) return;
+      // Always update our stored mtime so save conflict detection works
+      this._fileMtimes.set(path, mtime);
+      const entry = this._openFiles.find(f => f.path === path);
+      if (!entry?.dirty) {
+        // Clean file: auto-reload
+        const model = this._fileModels.get(path);
+        if (model) {
+          model.setValue(content);
+          this._fileCleanVersions.set(path, model.getAlternativeVersionId());
+        }
       }
+      // If dirty: leave the model alone; save will show a conflict dialog
     } catch {
       // Silently ignore poll errors
     }
+  }
+
+  _renderDialog() {
+    const d = this._dialog;
+    if (!d) return '';
+    if (d.type === 'close-dirty') {
+      const filename = d.path.split('/').pop();
+      return html`
+        <div class="dialog-title">Unsaved Changes</div>
+        <div class="dialog-body">Save changes to <strong>${filename}</strong> before closing?</div>
+        <div class="dialog-actions">
+          <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
+          <button class="dialog-btn dialog-btn-danger" @click=${() => this._confirmClose(d.path)}>Discard</button>
+          <button class="dialog-btn dialog-btn-primary" @click=${async () => {
+            await this._saveFile(d.path);
+            if (!this._dialog) this._confirmClose(d.path);
+          }}>Save</button>
+        </div>
+      `;
+    }
+    if (d.type === 'save-conflict') {
+      const filename = d.path.split('/').pop();
+      return html`
+        <div class="dialog-title">File Changed Externally</div>
+        <div class="dialog-body"><strong>${filename}</strong> was modified since you opened it. Overwrite with your changes?</div>
+        <div class="dialog-actions">
+          <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
+          <button class="dialog-btn dialog-btn-danger" @click=${() => this._saveFile(d.path, true)}>Overwrite</button>
+        </div>
+      `;
+    }
+    return '';
   }
 
   async _saveIdentity() {
@@ -1446,7 +1651,7 @@ class LoopProjectScreen extends LitElement {
           ${open ? this._renderTreeNodes(node.children, depth + 1, nodePath) : ''}
         `;
       } else {
-        const isSelected = this._selectedFile === nodePath;
+        const isSelected = this._activeTab === nodePath || this._openFiles.some(f => f.path === nodePath);
         return html`
           <div
             class="tree-node ${isSelected ? 'selected' : ''}"
@@ -1722,9 +1927,7 @@ class LoopProjectScreen extends LitElement {
     if (!this.project) return html`<div style="padding:40px;color:var(--fg-3)">Loading…</div>`;
 
     const baseTabs = this._narrow ? ['agent', 'logs', 'shell', 'changes'] : ['agent', 'logs', 'shell'];
-    const tabs = this._selectedFile ? [...baseTabs, 'file'] : baseTabs;
     const changeCount = this._files.length;
-    const selectedFilename = this._selectedFile?.split('/').pop() ?? '';
 
     return html`
       ${this._narrow ? '' : html`
@@ -1764,23 +1967,31 @@ class LoopProjectScreen extends LitElement {
               </svg>
             </div>
             <div class="tabs">
-              ${tabs.map(tab => html`
+              ${baseTabs.map(tab => html`
                 <div
                   class="tab ${this._activeTab === tab ? 'active' : ''}"
                   @click=${() => this._activeTab = tab}
-                  style="display:flex;align-items:center"
                 >
-                  ${tab === 'file'
-                    ? html`<span class="file-tab-name">${selectedFilename}</span>
-                        <span class="tab-close" @click=${(e) => { e.stopPropagation(); this._selectedFile = null; this._activeTab = 'agent'; this._stopPolling(); }}>
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M18 6 6 18M6 6l12 12"/>
-                          </svg>
-                        </span>`
-                    : html`${tab}${tab === 'changes' && changeCount > 0 ? html` <span class="count-badge">${changeCount}</span>` : ''}`
-                  }
+                  ${tab}${tab === 'changes' && changeCount > 0 ? html` <span class="count-badge">${changeCount}</span>` : ''}
                 </div>
               `)}
+              ${this._openFiles.map(({ path, dirty }) => {
+                const filename = path.split('/').pop();
+                return html`
+                  <div
+                    class="tab file-tab ${this._activeTab === path ? 'active' : ''}"
+                    @click=${() => this._activeTab = path}
+                  >
+                    <span class="file-tab-name">${filename}</span>
+                    ${dirty ? html`<span class="file-tab-dirty" title="Unsaved changes"></span>` : ''}
+                    <span class="tab-close" @click=${(e) => this._closeFile(path, e)}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 6 6 18M6 6l12 12"/>
+                      </svg>
+                    </span>
+                  </div>
+                `;
+              })}
             </div>
             <div class="${this._running ? 'connection-chip' : 'connection-chip idle-chip'}">
               <span class="dot"></span>
@@ -1794,12 +2005,20 @@ class LoopProjectScreen extends LitElement {
           ${this._activeTab === 'logs' ? this._renderLogsPlaceholder() : ''}
           ${this._activeTab === 'shell' ? this._renderShellPlaceholder() : ''}
           ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
-          <div id="monaco-container" style="display:${this._activeTab === 'file' ? 'flex' : 'none'};flex:1;min-height:0"></div>
+          <div id="monaco-container" style="display:${this._isFilePath(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
 
         </div>
       </div>
 
-      ${this._narrow && this._activeTab !== 'changes' ? html`
+      ${this._dialog ? html`
+        <div class="dialog-overlay" @click=${() => this._dialog = null}>
+          <div class="dialog-box" @click=${e => e.stopPropagation()}>
+            ${this._renderDialog()}
+          </div>
+        </div>
+      ` : ''}
+
+      ${this._narrow && this._activeTab !== 'changes' && !this._isFilePath(this._activeTab) ? html`
         ${this._inputOpen ? html`
           <div class="mobile-input-backdrop" @click=${() => this._inputOpen = false}></div>
           <div class="mobile-input-bar">

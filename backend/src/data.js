@@ -110,6 +110,25 @@ export function getFileContent(id, filePath) {
   }
 }
 
+export function saveFileContent(id, filePath, content, mtime, force = false) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const abs = resolve(base, normalize(filePath));
+  if (!abs.startsWith(base + '/') && abs !== base) return null;
+  try {
+    if (!force) {
+      let currentMtime = 0;
+      try { currentMtime = statSync(abs).mtimeMs; } catch { /* new file */ }
+      if (currentMtime !== mtime) return { conflict: true, mtime: currentMtime };
+    }
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content, 'utf8');
+    return { ok: true, mtime: statSync(abs).mtimeMs };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
 function runGit(cwd, args) {
   return new Promise((resolve) => {
     if (!existsSync(cwd)) {

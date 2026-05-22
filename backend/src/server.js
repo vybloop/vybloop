@@ -21,6 +21,7 @@ import {
   updateConfig,
   getFileTree,
   getFileContent,
+  saveFileContent,
   TEMPLATES,
 } from './data.js';
 
@@ -122,6 +123,20 @@ app.get('/api/projects/:id/file', async (req, res) => {
   if (!filePath) return res.status(400).json({ error: 'path is required' });
   const result = getFileContent(req.params.id, filePath);
   if (!result) return res.status(404).json({ error: 'file not found' });
+  res.json(result);
+});
+
+app.put('/api/projects/:id/file', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path is required' });
+  const { content, mtime, force } = req.body;
+  if (content === undefined) return res.status(400).json({ error: 'content is required' });
+  const result = saveFileContent(req.params.id, filePath, content, mtime ?? 0, force ?? false);
+  if (!result) return res.status(404).json({ error: 'project not found' });
+  if (result.conflict) return res.status(409).json(result);
+  if (result.error) return res.status(500).json(result);
   res.json(result);
 });
 
