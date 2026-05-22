@@ -37,6 +37,8 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 
 `status` and `changes` are runtime-only; not persisted. Project repos are stored at `/data/<id>/git`.
 
+`hasCompose` is a runtime-only boolean included in project responses — `true` when a `docker-compose.yml` / `compose.yml` (or `.yaml` variants) exists in the repo root.
+
 ### API reference — `backend/src/server.js`
 
 | Method | Path | Description |
@@ -46,7 +48,7 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 | `GET` | `/api/projects/:id` | Get a single project. |
 | `GET` | `/api/projects/:id/changes` | List pending file changes. |
 | `POST` | `/api/projects/:id/commit` | Commit staged changes. Body: `{ message }`. |
-| `POST` | `/api/projects/:id/run` | Toggle `status` between `running` and `idle`. |
+| `POST` | `/api/projects/:id/run` | Start or stop the project's compose stack. Requires `docker-compose.yml` in the repo root. Returns `{ status }`. |
 | `POST` | `/api/projects/:id/changes/stage-all` | Stage all changed files. |
 | `POST` | `/api/projects/:id/changes/:fileId/toggle` | Toggle staged/unstaged for a file. |
 | `GET` | `/api/templates` | List available project templates. |
@@ -82,3 +84,19 @@ podman run --rm -it \
 The `shell` session type runs `bash` in the same container (without the claudeconfig mount).
 
 Sessions are keyed by `projectId:type` and reused across reconnects while alive.
+
+### Project run/stop (compose)
+
+When a project's repo contains a `docker-compose.yml` (or `compose.yml`), the UI shows a **Run** button in the sidebar. Clicking it calls `POST /api/projects/:id/run`.
+
+**Backend** (`backend/src/server.js`): The endpoint responds immediately with the new status, then runs the compose command in the background via `execFile` with `cwd` set to the repo path:
+- **Start**: `podman compose up --build -d` → sets status to `running`
+- **Stop**: `podman compose down` → sets status to `idle`
+
+If the background command fails, status is set to `error` and a `status` SSE event is pushed to connected clients via `broadcastStatus` (`backend/src/file-watcher.js`).
+
+On server startup, `restoreComposeStates()` runs `podman compose ps -q` for each project that has a compose file and restores `running` status for any that have containers already up.
+
+**Frontend** (`frontend/src/loop-project-screen.js`): The Run/Stop button is only rendered when `project.hasCompose` is true. The `status` SSE event (in addition to the fetch response) keeps `_running` in sync if compose fails after the optimistic update.
+
+**Compose provider**: `podman-compose` is installed in the app container (`Dockerfile`). Short image names (e.g. `golang:1.23-alpine`) resolve via `docker.io` thanks to `/etc/containers/registries.conf` set in the `podman-base` image (`podman/Dockerfile`).
