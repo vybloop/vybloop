@@ -3,7 +3,7 @@ import './loop-top-bar.js';
 import {
   iconArrowLeft, iconPlay, iconStop, iconChevronDown, iconRefresh,
   iconExternal, iconTerminal, iconSparkle, iconCopy, iconCheck,
-  iconBranch, iconChevron
+  iconBranch, iconChevron, iconPencil, iconSend
 } from './icons.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -24,6 +24,8 @@ class LoopProjectScreen extends LitElement {
     _committed: { state: true },
     _loading: { state: true },
     _narrow: { state: true },
+    _inputOpen: { state: true },
+    _mobileInput: { state: true },
   };
 
   static styles = [css`
@@ -621,6 +623,82 @@ class LoopProjectScreen extends LitElement {
         display: none;
       }
     }
+
+    /* Mobile input FAB + bar */
+    :host {
+      position: relative;
+    }
+    .input-fab {
+      position: absolute;
+      bottom: 56px;
+      right: 16px;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 12px oklch(0 0 0 / 0.35);
+      z-index: 10;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .input-fab:active { transform: scale(0.93); }
+    .mobile-input-backdrop {
+      position: absolute;
+      inset: 0;
+      z-index: 9;
+    }
+    .mobile-input-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--bg-1);
+      border-top: 1px solid var(--line-soft);
+      padding: 10px 12px;
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      z-index: 10;
+    }
+    .mobile-input-textarea {
+      flex: 1;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      color: var(--fg-0);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      padding: 8px 12px;
+      resize: none;
+      outline: none;
+      min-height: 42px;
+      max-height: 120px;
+      line-height: 1.5;
+      transition: border-color 0.12s;
+    }
+    .mobile-input-textarea:focus { border-color: var(--accent); }
+    .mobile-input-textarea::placeholder { color: var(--fg-3); }
+    .mobile-input-send {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: opacity 0.12s, transform 0.12s;
+    }
+    .mobile-input-send:disabled { opacity: 0.35; cursor: not-allowed; }
+    .mobile-input-send:not(:disabled):active { transform: scale(0.93); }
   `, unsafeCSS(xtermCss)];
 
   constructor() {
@@ -638,6 +716,8 @@ class LoopProjectScreen extends LitElement {
     this._termWs = null;
     this._mq = window.matchMedia('(max-width: 768px)');
     this._narrow = this._mq.matches;
+    this._inputOpen = false;
+    this._mobileInput = '';
     this._mqHandler = (e) => {
       this._narrow = e.matches;
       if (!e.matches && this._activeTab === 'changes') this._activeTab = 'agent';
@@ -660,9 +740,18 @@ class LoopProjectScreen extends LitElement {
       // Connect the terminal once the project arrives (terminal is already initialized)
       if (this._term && !this._termWs) this._connectWs();
     }
-    if (changed.has('_activeTab') && this._activeTab === 'agent') {
-      // Refit the terminal when switching back to the agent tab
-      requestAnimationFrame(() => this._termFit?.fit());
+    if (changed.has('_activeTab')) {
+      if (this._activeTab === 'agent') {
+        requestAnimationFrame(() => this._termFit?.fit());
+      }
+      if (this._activeTab === 'changes') {
+        this._inputOpen = false;
+      }
+    }
+    if (changed.has('_inputOpen') && this._inputOpen) {
+      requestAnimationFrame(() => {
+        this.shadowRoot.querySelector('.mobile-input-textarea')?.focus();
+      });
     }
   }
 
@@ -854,6 +943,16 @@ class LoopProjectScreen extends LitElement {
 
   _back() {
     this.dispatchEvent(new CustomEvent('navigate-home', { bubbles: true, composed: true }));
+  }
+
+  _sendMobileInput() {
+    const text = this._mobileInput;
+    if (!text.trim()) return;
+    if (this._termWs?.readyState === WebSocket.OPEN) {
+      this._termWs.send(JSON.stringify({ type: 'input', data: text + '\r' }));
+    }
+    this._mobileInput = '';
+    this._inputOpen = false;
   }
 
   _pathParts(path) {
@@ -1143,6 +1242,29 @@ class LoopProjectScreen extends LitElement {
           </div>
         </div>
       </div>
+
+      ${this._narrow && this._activeTab !== 'changes' ? html`
+        ${this._inputOpen ? html`
+          <div class="mobile-input-backdrop" @click=${() => this._inputOpen = false}></div>
+          <div class="mobile-input-bar">
+            <textarea
+              class="mobile-input-textarea"
+              placeholder="Send a message…"
+              rows="1"
+              .value=${this._mobileInput}
+              @input=${e => this._mobileInput = e.target.value}
+              @keydown=${e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._sendMobileInput(); } }}
+            ></textarea>
+            <button
+              class="mobile-input-send"
+              ?disabled=${!this._mobileInput.trim()}
+              @click=${this._sendMobileInput}
+            >${iconSend}</button>
+          </div>
+        ` : html`
+          <button class="input-fab" @click=${() => this._inputOpen = true}>${iconPencil}</button>
+        `}
+      ` : ''}
     `;
   }
 }

@@ -114,3 +114,11 @@ export const iconGrid = iconBase(svg`
 export const iconList = iconBase(svg`
   <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>
 `);
+
+export const iconPencil = iconBase(svg`
+  <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+`);
+
+export const iconSend = iconBase(svg`
+  <path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>
+`);
