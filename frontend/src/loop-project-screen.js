@@ -71,6 +71,7 @@ class LoopProjectScreen extends LitElement {
     _filesOpen: { state: true },
     _fileTree: { state: true },
     _filesLoading: { state: true },
+    _expandedDirs: { state: true },
     _openFiles: { state: true },
     _dialog: { state: true },
   };
