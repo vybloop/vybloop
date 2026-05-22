@@ -618,6 +618,7 @@ class LoopProjectScreen extends LitElement {
       border-bottom: 2px solid transparent;
       transition: color 0.12s;
       margin-bottom: -1px;
+      white-space: nowrap;
     }
     .tab:hover { color: var(--fg-1); }
     .tab.active {
