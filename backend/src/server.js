@@ -133,6 +133,30 @@ app.post('/api/projects/:id/run', async (req, res) => {
   }
 });
 
+app.post('/api/projects/:id/restart', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  if (!project.hasCompose) return res.status(400).json({ error: 'no compose file found' });
+
+  const id = req.params.id;
+  const repoPath = `/data/${id}/git`;
+  res.json({ status: 'running' });
+  execFile('podman', ['compose', 'restart'], { cwd: repoPath }, async (err) => {
+    if (err) {
+      console.error(`[compose] restart failed for ${id}:`, err.message);
+      setProjectStatus(id, 'error');
+      broadcastStatus(id, 'error');
+    } else {
+      try {
+        const ports = await getContainerPorts(repoPath);
+        broadcastPorts(id, ports);
+      } catch (e) {
+        console.error(`[compose] port detection failed for ${id}:`, e.message);
+      }
+    }
+  });
+});
+
 app.get('/api/projects/:id/ports', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
