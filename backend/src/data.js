@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve, normalize } from 'path';
 import { spawn, execFile } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -93,6 +93,21 @@ export function getFileTree(id) {
   const dir = gitDir(id);
   if (!existsSync(dir)) return null;
   return buildTree(dir);
+}
+
+export function getFileContent(id, filePath) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const abs = resolve(base, normalize(filePath));
+  if (!abs.startsWith(base + '/') && abs !== base) return null;
+  try {
+    const stat = statSync(abs);
+    if (!stat.isFile()) return null;
+    const content = readFileSync(abs, 'utf8');
+    return { content, mtime: stat.mtimeMs };
+  } catch {
+    return null;
+  }
 }
 
 function runGit(cwd, args) {

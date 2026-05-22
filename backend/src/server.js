@@ -20,6 +20,7 @@ import {
   getConfig,
   updateConfig,
   getFileTree,
+  getFileContent,
   TEMPLATES,
 } from './data.js';
 
@@ -112,6 +113,16 @@ app.get('/api/projects/:id/files', async (req, res) => {
   const tree = getFileTree(req.params.id);
   if (tree === null) return res.json([]);
   res.json(tree);
+});
+
+app.get('/api/projects/:id/file', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path is required' });
+  const result = getFileContent(req.params.id, filePath);
+  if (!result) return res.status(404).json({ error: 'file not found' });
+  res.json(result);
 });
 
 app.get('/api/templates', (req, res) => {
