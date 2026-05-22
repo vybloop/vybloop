@@ -15,6 +15,8 @@ import {
   toggleRun,
   toggleStage,
   stageAll,
+  getRemoteStatus,
+  syncProject,
   getConfig,
   updateConfig,
   TEMPLATES,
@@ -61,6 +63,8 @@ app.post('/api/projects/:id/commit', async (req, res) => {
   const { message } = req.body;
   if (!message || !message.trim()) return res.status(400).json({ error: 'message is required' });
   const result = await commitChanges(req.params.id, { message });
+  if (!result) return res.status(404).json({ error: 'not found' });
+  if (!result.ok) return res.status(500).json({ error: result.error });
   res.json(result);
 });
 
@@ -68,6 +72,21 @@ app.post('/api/projects/:id/run', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
   const result = toggleRun(req.params.id);
+  res.json(result);
+});
+
+app.get('/api/projects/:id/remote-status', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const status = await getRemoteStatus(req.params.id);
+  res.json(status);
+});
+
+app.post('/api/projects/:id/sync', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const result = await syncProject(req.params.id);
+  if (!result) return res.status(404).json({ error: 'not found' });
   res.json(result);
 });
 

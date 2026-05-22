@@ -125,10 +125,33 @@ class LoopTopBar extends LitElement {
       flex-direction: column;
       gap: 6px;
     }
+    .config-row + .config-row {
+      margin-top: 12px;
+    }
     .config-label {
       font-size: 12px;
       font-weight: 500;
       color: var(--fg-1);
+    }
+    .config-input {
+      width: 100%;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      color: var(--fg-0);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      padding: 5px 8px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.12s;
+    }
+    .config-input:focus { border-color: var(--accent); }
+    .config-input::placeholder { color: var(--fg-3); }
+    .config-divider {
+      border: none;
+      border-top: 1px solid var(--line-soft);
+      margin: 12px 0;
     }
     .segmented {
       display: flex;
@@ -163,7 +186,7 @@ class LoopTopBar extends LitElement {
   constructor() {
     super();
     this._configOpen = false;
-    this._config = { terminalMode: 'tmux' };
+    this._config = { terminalMode: 'direct', gitName: '', gitEmail: '' };
     this._loadConfig();
   }
 
@@ -189,15 +212,29 @@ class LoopTopBar extends LitElement {
     } catch {}
   }
 
-  async _setTerminalMode(mode) {
+  async _patchConfig(updates) {
     try {
       const res = await fetch('/api/config', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ terminalMode: mode }),
+        body: JSON.stringify(updates),
       });
       if (res.ok) this._config = await res.json();
     } catch {}
+  }
+
+  async _setTerminalMode(mode) {
+    return this._patchConfig({ terminalMode: mode });
+  }
+
+  _onNameBlur(e) {
+    const val = e.target.value.trim();
+    if (val !== this._config.gitName) this._patchConfig({ gitName: val });
+  }
+
+  _onEmailBlur(e) {
+    const val = e.target.value.trim();
+    if (val !== this._config.gitEmail) this._patchConfig({ gitEmail: val });
   }
 
   _togglePopup(e) {
@@ -226,10 +263,35 @@ class LoopTopBar extends LitElement {
         <div class="right">
           <button class="icon-btn" title="Settings">${iconSettings}</button>
           <div class="avatar-wrap">
-            <div class="avatar" @click=${this._togglePopup}>R</div>
+            <div class="avatar" @click=${this._togglePopup}>
+              ${this._config.gitName ? this._config.gitName.trim()[0].toUpperCase() : '?'}
+            </div>
             ${this._configOpen ? html`
               <div class="config-popup">
                 <div class="popup-title">Settings</div>
+                <div class="config-row">
+                  <div class="config-label">Name</div>
+                  <input
+                    class="config-input"
+                    type="text"
+                    placeholder="Your name"
+                    .value=${this._config.gitName || ''}
+                    @blur=${this._onNameBlur}
+                    @keydown=${e => e.key === 'Enter' && e.target.blur()}
+                  />
+                </div>
+                <div class="config-row">
+                  <div class="config-label">Email</div>
+                  <input
+                    class="config-input"
+                    type="email"
+                    placeholder="you@example.com"
+                    .value=${this._config.gitEmail || ''}
+                    @blur=${this._onEmailBlur}
+                    @keydown=${e => e.key === 'Enter' && e.target.blur()}
+                  />
+                </div>
+                <hr class="config-divider" />
                 <div class="config-row">
                   <div class="config-label">Terminal mode</div>
                   <div class="segmented">

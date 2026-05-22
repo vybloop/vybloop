@@ -19,8 +19,8 @@ export const TEMPLATES = [
   { id: 'expo', name: 'Expo (React Native)' },
 ];
 
-const DEFAULT_DB = { nextId: 1, projects: [], config: { terminalMode: 'direct' } };
-const DEFAULT_CONFIG = { terminalMode: 'direct' };
+const DEFAULT_DB = { nextId: 1, projects: [], config: { terminalMode: 'direct', gitName: '', gitEmail: '' } };
+const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '' };
 
 function load() {
   try {
@@ -64,13 +64,31 @@ function gitDir(id) {
 }
 
 function runGit(cwd, args) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     if (!existsSync(cwd)) {
       resolve('');
       return;
     }
-    execFile('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
+    console.log(`[git] ${args.join(' ')} (cwd: ${cwd})`);
+    execFile('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) console.log(`[git] exit ${err.code}: ${stderr?.trim()}`);
       resolve(stdout || '');
+    });
+  });
+}
+
+function runGitResult(cwd, args) {
+  return new Promise((resolve) => {
+    if (!existsSync(cwd)) {
+      resolve({ ok: false, stdout: '', stderr: 'repository not found' });
+      return;
+    }
+    console.log(`[git] ${args.join(' ')} (cwd: ${cwd})`);
+    execFile('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      const result = { ok: !err, stdout: stdout || '', stderr: stderr || '' };
+      if (err) console.log(`[git] exit ${err.code}: ${stderr?.trim()}`);
+      else if (stdout?.trim()) console.log(`[git] ok: ${stdout.trim().slice(0, 200)}`);
+      resolve(result);
     });
   });
 }
@@ -148,6 +166,50 @@ async function countGitChanges(id) {
   const cwd = gitDir(id);
   const out = await runGit(cwd, ['status', '--porcelain=v1']);
   return out ? out.split('\n').filter(l => l.trim()).length : 0;
+}
+
+export async function getRemoteStatus(id) {
+  const cwd = gitDir(id);
+  const tracking = await runGitResult(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (!tracking.ok) return null;
+  const [aheadRes, behindRes] = await Promise.all([
+    runGitResult(cwd, ['rev-list', '--count', '@{u}..HEAD']),
+    runGitResult(cwd, ['rev-list', '--count', 'HEAD..@{u}']),
+  ]);
+  return {
+    remote: tracking.stdout.trim(),
+    ahead: parseInt(aheadRes.stdout.trim(), 10) || 0,
+    behind: parseInt(behindRes.stdout.trim(), 10) || 0,
+  };
+}
+
+export async function syncProject(id) {
+  const p = projects.find(p => p.id === id);
+  if (!p) return null;
+  const cwd = gitDir(id);
+
+  const tracking = await runGitResult(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (!tracking.ok) return { ok: false, error: 'no remote tracking branch configured' };
+
+  await runGitResult(cwd, ['fetch']);
+
+  const behindRes = await runGitResult(cwd, ['rev-list', '--count', 'HEAD..@{u}']);
+  const behind = parseInt(behindRes.stdout.trim(), 10) || 0;
+
+  if (behind > 0) {
+    const rebaseRes = await runGitResult(cwd, ['rebase', '@{u}']);
+    if (!rebaseRes.ok) return { ok: false, error: rebaseRes.stderr.trim() || 'rebase failed' };
+  }
+
+  const aheadRes = await runGitResult(cwd, ['rev-list', '--count', '@{u}..HEAD']);
+  const ahead = parseInt(aheadRes.stdout.trim(), 10) || 0;
+
+  if (ahead > 0) {
+    const pushRes = await runGitResult(cwd, ['push']);
+    if (!pushRes.ok) return { ok: false, error: pushRes.stderr.trim() || 'push failed' };
+  }
+
+  return { ok: true };
 }
 
 function injectGithubToken(repoUrl) {
@@ -237,8 +299,12 @@ export async function commitChanges(id, { message }) {
   if (!project) return null;
   const cwd = gitDir(id);
 
-  const out = await runGit(cwd, ['commit', '-m', message]);
-  if (!out && !existsSync(cwd)) return { ok: false, error: 'repository not found' };
+  const result = await runGitResult(cwd, ['commit', '-m', message]);
+  if (!result.ok) {
+    const err = result.stderr.trim() || result.stdout.trim() || 'commit failed';
+    console.log(`[git] commit failed: ${err}`);
+    return { ok: false, error: err };
+  }
 
   project.lastActivity = new Date().toISOString();
   persist();
@@ -261,16 +327,37 @@ export function toggleRun(id) {
   return { status: projectStatus[id] };
 }
 
+function applyGitAuthor(name, email) {
+  const ops = [];
+  if (name) ops.push(new Promise(resolve =>
+    execFile('git', ['config', '--global', 'user.name', name], resolve)
+  ));
+  if (email) ops.push(new Promise(resolve =>
+    execFile('git', ['config', '--global', 'user.email', email], resolve)
+  ));
+  if (ops.length) {
+    console.log(`[git] applying global identity: "${name}" <${email}>`);
+    Promise.all(ops);
+  }
+}
+
+// Apply saved identity on startup
+if (config.gitName || config.gitEmail) applyGitAuthor(config.gitName, config.gitEmail);
+
 export function getConfig() {
   return { ...config };
 }
 
 export function updateConfig(updates) {
-  const allowed = ['terminalMode'];
+  const allowed = ['terminalMode', 'gitName', 'gitEmail'];
+  const prev = { gitName: config.gitName, gitEmail: config.gitEmail };
   for (const key of allowed) {
     if (updates[key] !== undefined) config[key] = updates[key];
   }
   persist();
+  if (config.gitName !== prev.gitName || config.gitEmail !== prev.gitEmail) {
+    applyGitAuthor(config.gitName, config.gitEmail);
+  }
   return { ...config };
 }
 

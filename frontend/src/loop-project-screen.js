@@ -26,6 +26,13 @@ class LoopProjectScreen extends LitElement {
     _narrow: { state: true },
     _inputOpen: { state: true },
     _mobileInput: { state: true },
+    _remoteStatus: { state: true },
+    _syncing: { state: true },
+    _commitError: { state: true },
+    _identityNeeded: { state: true },
+    _identityName: { state: true },
+    _identityEmail: { state: true },
+    _savingIdentity: { state: true },
   };
 
   static styles = [css`
@@ -354,6 +361,90 @@ class LoopProjectScreen extends LitElement {
     }
     .commit-btn:hover:not(:disabled) { opacity: 0.85; }
     .commit-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .commit-error {
+      font-size: 11px;
+      color: var(--del);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .identity-card {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .identity-card-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--fg-1);
+    }
+    .identity-card-sub {
+      font-size: 11px;
+      color: var(--fg-3);
+      margin-top: -4px;
+    }
+    .identity-inputs {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .identity-input {
+      background: var(--bg-0);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      color: var(--fg-0);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      padding: 5px 8px;
+      outline: none;
+      transition: border-color 0.12s;
+    }
+    .identity-input:focus { border-color: var(--accent); }
+    .identity-input::placeholder { color: var(--fg-3); }
+    .identity-save-btn {
+      align-self: flex-end;
+      padding: 5px 14px;
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: opacity 0.12s;
+    }
+    .identity-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .identity-save-btn:not(:disabled):hover { opacity: 0.85; }
+    .sync-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 10px;
+      background: transparent;
+      color: var(--fg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: opacity 0.12s, background 0.12s;
+      white-space: nowrap;
+    }
+    .sync-btn:hover:not(:disabled) { background: var(--bg-2); }
+    .sync-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .remote-counts {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 10px;
+      font-family: var(--font-mono);
+    }
+    .remote-ahead { color: var(--add); }
+    .remote-behind { color: var(--accent); }
 
     /* Main area */
     .main-area {
@@ -664,6 +755,13 @@ class LoopProjectScreen extends LitElement {
     this._narrow = this._mq.matches;
     this._inputOpen = false;
     this._mobileInput = '';
+    this._remoteStatus = null;
+    this._syncing = false;
+    this._commitError = '';
+    this._identityNeeded = false;
+    this._identityName = '';
+    this._identityEmail = '';
+    this._savingIdentity = false;
     this._mqHandler = (e) => {
       this._narrow = e.matches;
       if (!e.matches && this._activeTab === 'changes') this._activeTab = 'agent';
@@ -808,14 +906,55 @@ class LoopProjectScreen extends LitElement {
     if (!this.project) return;
     this._loading = true;
     try {
-      const res = await fetch(`/api/projects/${this.project.id}/changes`);
-      if (res.ok) {
-        this._files = await res.json();
-      }
+      const [changesRes, remoteRes] = await Promise.all([
+        fetch(`/api/projects/${this.project.id}/changes`),
+        fetch(`/api/projects/${this.project.id}/remote-status`),
+      ]);
+      if (changesRes.ok) this._files = await changesRes.json();
+      if (remoteRes.ok) this._remoteStatus = await remoteRes.json();
     } catch (e) {
       console.error('Failed to load changes', e);
     } finally {
       this._loading = false;
+    }
+  }
+
+  async _saveIdentity() {
+    if (!this._identityName.trim() || !this._identityEmail.trim()) return;
+    this._savingIdentity = true;
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gitName: this._identityName.trim(), gitEmail: this._identityEmail.trim() }),
+      });
+      if (res.ok) {
+        this._identityNeeded = false;
+        // Retry the commit now that identity is set
+        await this._commit();
+      }
+    } catch (e) {
+      console.error('Failed to save identity', e);
+    } finally {
+      this._savingIdentity = false;
+    }
+  }
+
+  async _sync() {
+    if (!this.project || this._syncing) return;
+    this._syncing = true;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/sync`, { method: 'POST' });
+      if (res.ok) {
+        const result = await res.json();
+        if (result.ok) {
+          await this._loadChanges();
+        }
+      }
+    } catch (e) {
+      console.error('Failed to sync', e);
+    } finally {
+      this._syncing = false;
     }
   }
 
@@ -876,11 +1015,32 @@ class LoopProjectScreen extends LitElement {
           paths: staged.map(f => f.path),
         }),
       });
-      if (res.ok) {
+      const result = await res.json();
+      if (res.ok && result.ok) {
         this._files = this._files.filter(f => !f.staged);
         this._commitMsg = '';
         this._committed = true;
+        this._identityNeeded = false;
         setTimeout(() => this._committed = false, 2500);
+        fetch(`/api/projects/${this.project.id}/remote-status`)
+          .then(r => r.ok ? r.json() : null)
+          .then(s => { if (s !== null) this._remoteStatus = s; });
+      } else {
+        const msg = result.error || 'commit failed';
+        console.error('Commit failed:', msg);
+        const isIdentityError = /user\.(name|email)|identity unknown|Please tell me who you are/i.test(msg);
+        if (isIdentityError) {
+          this._identityNeeded = true;
+          this._identityName = '';
+          this._identityEmail = '';
+          // Pre-populate from saved config
+          fetch('/api/config').then(r => r.ok ? r.json() : null).then(cfg => {
+            if (cfg) { this._identityName = cfg.gitName || ''; this._identityEmail = cfg.gitEmail || ''; }
+          });
+        } else {
+          this._commitError = msg;
+          setTimeout(() => this._commitError = '', 5000);
+        }
       }
     } finally {
       this._committing = false;
@@ -1009,6 +1169,36 @@ class LoopProjectScreen extends LitElement {
             @input=${e => this._commitMsg = e.target.value}
             ?disabled=${staged.length === 0}
           ></textarea>
+          ${this._commitError ? html`<div class="commit-error">${this._commitError}</div>` : ''}
+          ${this._identityNeeded ? html`
+            <div class="identity-card">
+              <div class="identity-card-title">Git identity required</div>
+              <div class="identity-card-sub">Set your name and email to commit.</div>
+              <div class="identity-inputs">
+                <input
+                  class="identity-input"
+                  type="text"
+                  placeholder="Your name"
+                  .value=${this._identityName}
+                  @input=${e => this._identityName = e.target.value}
+                  @keydown=${e => e.key === 'Enter' && this._saveIdentity()}
+                />
+                <input
+                  class="identity-input"
+                  type="email"
+                  placeholder="you@example.com"
+                  .value=${this._identityEmail}
+                  @input=${e => this._identityEmail = e.target.value}
+                  @keydown=${e => e.key === 'Enter' && this._saveIdentity()}
+                />
+              </div>
+              <button
+                class="identity-save-btn"
+                ?disabled=${!this._identityName.trim() || !this._identityEmail.trim() || this._savingIdentity}
+                @click=${this._saveIdentity}
+              >${this._savingIdentity ? 'Saving…' : 'Save & commit'}</button>
+            </div>
+          ` : ''}
           <div class="commit-row">
             <div class="branch-indicator">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1016,14 +1206,30 @@ class LoopProjectScreen extends LitElement {
                 <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
               </svg>
               ${branch}
+              ${this._remoteStatus ? html`
+                <span class="remote-counts">
+                  ${this._remoteStatus.ahead > 0 ? html`<span class="remote-ahead">↑${this._remoteStatus.ahead}</span>` : ''}
+                  ${this._remoteStatus.behind > 0 ? html`<span class="remote-behind">↓${this._remoteStatus.behind}</span>` : ''}
+                </span>
+              ` : ''}
             </div>
-            <button
-              class="commit-btn"
-              ?disabled=${staged.length === 0 || !this._commitMsg.trim() || this._committing}
-              @click=${this._commit}
-            >
-              ${this._committing ? 'Committing…' : `Commit ${staged.length > 0 ? staged.length : ''}`}
-            </button>
+            <div style="display:flex;gap:6px;align-items:center">
+              ${this._remoteStatus ? html`
+                <button
+                  class="sync-btn"
+                  ?disabled=${this._syncing}
+                  @click=${this._sync}
+                  title="Fetch, pull, and push"
+                >${this._syncing ? 'Syncing…' : 'Sync'}</button>
+              ` : ''}
+              <button
+                class="commit-btn"
+                ?disabled=${staged.length === 0 || !this._commitMsg.trim() || this._committing}
+                @click=${this._commit}
+              >
+                ${this._committing ? 'Committing…' : `Commit${staged.length > 0 ? ` ${staged.length}` : ''}`}
+              </button>
+            </div>
           </div>
         </div>
       </div>
