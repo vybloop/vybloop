@@ -7,6 +7,7 @@ import {
 } from './icons.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 
 const _isMac = /Macintosh|MacIntel/.test(navigator.userAgent);
@@ -689,6 +690,9 @@ class LoopProjectScreen extends LitElement {
     this._termFit = new FitAddon();
     this._term.loadAddon(this._termFit);
     this._term.open(el);
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    this._term.loadAddon(webgl);
     this._termFit.fit();
     new ResizeObserver(() => this._termFit?.fit()).observe(el);
 

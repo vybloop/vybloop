@@ -10,6 +10,7 @@
   "dependencies": {
     "@fontsource/cascadia-code": "^5.2.3",
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^5.5.0",
     "lit": "^3.1.0"
   },
