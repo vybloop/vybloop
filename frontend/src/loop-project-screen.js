@@ -33,6 +33,10 @@ class LoopProjectScreen extends LitElement {
     _identityName: { state: true },
     _identityEmail: { state: true },
     _savingIdentity: { state: true },
+    _changesOpen: { state: true },
+    _filesOpen: { state: true },
+    _fileTree: { state: true },
+    _filesLoading: { state: true },
   };
 
   static styles = [css`
@@ -168,22 +172,36 @@ class LoopProjectScreen extends LitElement {
     }
     .icon-btn-sm:hover { background: var(--bg-3); color: var(--fg-1); }
 
-    /* Changes section */
-    .changes-section {
+    /* Collapsible sections */
+    .collapsible-section {
       flex-shrink: 0;
-      min-height: 0;
-      overflow-y: auto;
-      padding: 0;
+      border-top: 1px solid var(--line-soft);
+    }
+    .collapsible-section:first-of-type {
+      border-top: none;
     }
     .section-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 12px 6px;
-      position: sticky;
-      top: 0;
+      padding: 8px 12px;
+      cursor: pointer;
+      user-select: none;
       background: var(--bg-0);
-      z-index: 1;
+    }
+    .section-header:hover { background: var(--bg-2); }
+    .section-header-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .section-chevron {
+      color: var(--fg-3);
+      transition: transform 0.15s;
+      flex-shrink: 0;
+    }
+    .section-chevron.open {
+      transform: rotate(90deg);
     }
     .section-title {
       display: flex;
@@ -194,6 +212,21 @@ class LoopProjectScreen extends LitElement {
       text-transform: uppercase;
       letter-spacing: 0.07em;
       color: var(--fg-3);
+    }
+
+    /* Changes section */
+    .changes-section {
+      flex-shrink: 0;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0;
+    }
+    .changes-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px 6px;
+      background: var(--bg-0);
     }
     .count-badge {
       background: var(--bg-3);
@@ -294,6 +327,62 @@ class LoopProjectScreen extends LitElement {
     .diff-del { color: var(--del); }
     .clean-state {
       padding: 20px 12px;
+      text-align: center;
+      color: var(--fg-3);
+      font-size: 12px;
+    }
+
+    /* File tree */
+    .file-tree {
+      padding: 4px 0 8px;
+    }
+    .tree-node {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 12px;
+      cursor: default;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-1);
+      overflow: hidden;
+    }
+    .tree-node:hover { background: var(--bg-2); }
+    .tree-node-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .tree-dir-toggle {
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      width: 100%;
+      gap: 5px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-1);
+      text-align: left;
+    }
+    .tree-dir-chevron {
+      color: var(--fg-3);
+      flex-shrink: 0;
+      transition: transform 0.12s;
+    }
+    .tree-dir-chevron.open {
+      transform: rotate(90deg);
+    }
+    .tree-icon {
+      flex-shrink: 0;
+      color: var(--fg-3);
+    }
+    .tree-dir-icon { color: var(--accent); }
+    .tree-empty {
+      padding: 12px;
       text-align: center;
       color: var(--fg-3);
       font-size: 12px;
@@ -762,6 +851,11 @@ class LoopProjectScreen extends LitElement {
     this._identityName = '';
     this._identityEmail = '';
     this._savingIdentity = false;
+    this._changesOpen = true;
+    this._filesOpen = true;
+    this._fileTree = null;
+    this._filesLoading = false;
+    this._expandedDirs = new Set();
     this._mqHandler = (e) => {
       this._narrow = e.matches;
       if (!e.matches && this._activeTab === 'changes') this._activeTab = 'agent';
@@ -781,6 +875,7 @@ class LoopProjectScreen extends LitElement {
     if (changed.has('project') && this.project) {
       this._running = this.project.status === 'running';
       this._loadChanges();
+      this._loadFileTree();
       // Connect the terminal once the project arrives (terminal is already initialized)
       if (this._term && !this._termWs) this._connectWs();
     }
@@ -916,6 +1011,19 @@ class LoopProjectScreen extends LitElement {
       console.error('Failed to load changes', e);
     } finally {
       this._loading = false;
+    }
+  }
+
+  async _loadFileTree() {
+    if (!this.project) return;
+    this._filesLoading = true;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/files`);
+      if (res.ok) this._fileTree = await res.json();
+    } catch (e) {
+      console.error('Failed to load file tree', e);
+    } finally {
+      this._filesLoading = false;
     }
   }
 
@@ -1097,6 +1205,47 @@ class LoopProjectScreen extends LitElement {
     `;
   }
 
+  _toggleDir(path) {
+    const next = new Set(this._expandedDirs);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    this._expandedDirs = next;
+  }
+
+  _renderTreeNodes(nodes, depth = 0, parentPath = '') {
+    const indent = depth * 14;
+    return nodes.map(node => {
+      const nodePath = parentPath ? `${parentPath}/${node.name}` : node.name;
+      if (node.type === 'dir') {
+        const open = this._expandedDirs.has(nodePath);
+        return html`
+          <div class="tree-node" style="padding-left:${12 + indent}px">
+            <button class="tree-dir-toggle" @click=${(e) => { e.stopPropagation(); this._toggleDir(nodePath); }}>
+              <svg class="tree-dir-chevron ${open ? 'open' : ''}" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 6 6 6-6 6"/>
+              </svg>
+              <svg class="tree-icon tree-dir-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/>
+              </svg>
+              <span class="tree-node-name">${node.name}</span>
+            </button>
+          </div>
+          ${open ? this._renderTreeNodes(node.children, depth + 1, nodePath) : ''}
+        `;
+      } else {
+        return html`
+          <div class="tree-node" style="padding-left:${12 + indent + 15}px">
+            <svg class="tree-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            <span class="tree-node-name">${node.name}</span>
+          </div>
+        `;
+      }
+    });
+  }
+
   _renderSidebar(asTab = false) {
     const staged = this._staged();
     const unstaged = this._unstaged();
@@ -1128,109 +1277,142 @@ class LoopProjectScreen extends LitElement {
           ` : ''}
         </div>
 
-        <div class="changes-section">
-          <div class="section-header">
-            <div class="section-title">
-              Changes
-              <span class="count-badge">${allFiles.length}</span>
+        <div class="collapsible-section">
+          <div class="section-header" @click=${() => this._changesOpen = !this._changesOpen}>
+            <div class="section-header-left">
+              <svg class="section-chevron ${this._changesOpen ? 'open' : ''}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 6 6 6-6 6"/>
+              </svg>
+              <div class="section-title">
+                Changes
+                ${allFiles.length > 0 ? html`<span class="count-badge">${allFiles.length}</span>` : ''}
+              </div>
             </div>
-            <div class="section-actions">
+            <div class="section-actions" @click=${e => e.stopPropagation()}>
               <button class="link-btn" @click=${this._stageAll}>Stage all</button>
               <button class="icon-btn-sm" title="Refresh" @click=${this._loadChanges}>${iconRefresh}</button>
             </div>
           </div>
 
-          ${allFiles.length === 0 ? html`
-            <div class="clean-state">
-              ${this._committed ? html`
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--add)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;margin-bottom:4px;vertical-align:middle">
-                  <path d="m5 12 5 5L20 7"/>
-                </svg>
-                Committed successfully
-              ` : 'Working tree clean'}
+          ${this._changesOpen ? html`
+            <div class="changes-section">
+              ${allFiles.length === 0 ? html`
+                <div class="clean-state">
+                  ${this._committed ? html`
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--add)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;margin-bottom:4px;vertical-align:middle">
+                      <path d="m5 12 5 5L20 7"/>
+                    </svg>
+                    Committed successfully
+                  ` : 'Working tree clean'}
+                </div>
+              ` : html`
+                ${staged.length > 0 ? html`
+                  <div class="subhead">Staged</div>
+                  ${staged.map(f => this._renderFileRow(f))}
+                ` : ''}
+                ${unstaged.length > 0 ? html`
+                  <div class="subhead">Unstaged</div>
+                  ${unstaged.map(f => this._renderFileRow(f))}
+                ` : ''}
+              `}
             </div>
-          ` : html`
-            ${staged.length > 0 ? html`
-              <div class="subhead">Staged</div>
-              ${staged.map(f => this._renderFileRow(f))}
-            ` : ''}
-            ${unstaged.length > 0 ? html`
-              <div class="subhead">Unstaged</div>
-              ${unstaged.map(f => this._renderFileRow(f))}
-            ` : ''}
-          `}
-        </div>
 
-        <div class="commit-box">
-          <textarea
-            class="commit-textarea"
-            placeholder="${staged.length > 0 ? 'Commit message…' : 'Stage files to commit'}"
-            .value=${this._commitMsg}
-            @input=${e => this._commitMsg = e.target.value}
-            ?disabled=${staged.length === 0}
-          ></textarea>
-          ${this._commitError ? html`<div class="commit-error">${this._commitError}</div>` : ''}
-          ${this._identityNeeded ? html`
-            <div class="identity-card">
-              <div class="identity-card-title">Git identity required</div>
-              <div class="identity-card-sub">Set your name and email to commit.</div>
-              <div class="identity-inputs">
-                <input
-                  class="identity-input"
-                  type="text"
-                  placeholder="Your name"
-                  .value=${this._identityName}
-                  @input=${e => this._identityName = e.target.value}
-                  @keydown=${e => e.key === 'Enter' && this._saveIdentity()}
-                />
-                <input
-                  class="identity-input"
-                  type="email"
-                  placeholder="you@example.com"
-                  .value=${this._identityEmail}
-                  @input=${e => this._identityEmail = e.target.value}
-                  @keydown=${e => e.key === 'Enter' && this._saveIdentity()}
-                />
+            <div class="commit-box">
+              <textarea
+                class="commit-textarea"
+                placeholder="${staged.length > 0 ? 'Commit message…' : 'Stage files to commit'}"
+                .value=${this._commitMsg}
+                @input=${e => this._commitMsg = e.target.value}
+                ?disabled=${staged.length === 0}
+              ></textarea>
+              ${this._commitError ? html`<div class="commit-error">${this._commitError}</div>` : ''}
+              ${this._identityNeeded ? html`
+                <div class="identity-card">
+                  <div class="identity-card-title">Git identity required</div>
+                  <div class="identity-card-sub">Set your name and email to commit.</div>
+                  <div class="identity-inputs">
+                    <input
+                      class="identity-input"
+                      type="text"
+                      placeholder="Your name"
+                      .value=${this._identityName}
+                      @input=${e => this._identityName = e.target.value}
+                      @keydown=${e => e.key === 'Enter' && this._saveIdentity()}
+                    />
+                    <input
+                      class="identity-input"
+                      type="email"
+                      placeholder="you@example.com"
+                      .value=${this._identityEmail}
+                      @input=${e => this._identityEmail = e.target.value}
+                      @keydown=${e => e.key === 'Enter' && this._saveIdentity()}
+                    />
+                  </div>
+                  <button
+                    class="identity-save-btn"
+                    ?disabled=${!this._identityName.trim() || !this._identityEmail.trim() || this._savingIdentity}
+                    @click=${this._saveIdentity}
+                  >${this._savingIdentity ? 'Saving…' : 'Save & commit'}</button>
+                </div>
+              ` : ''}
+              <div class="commit-row">
+                <div class="branch-indicator">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
+                    <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
+                  </svg>
+                  ${branch}
+                  ${this._remoteStatus ? html`
+                    <span class="remote-counts">
+                      ${this._remoteStatus.ahead > 0 ? html`<span class="remote-ahead">↑${this._remoteStatus.ahead}</span>` : ''}
+                      ${this._remoteStatus.behind > 0 ? html`<span class="remote-behind">↓${this._remoteStatus.behind}</span>` : ''}
+                    </span>
+                  ` : ''}
+                </div>
+                <div style="display:flex;gap:6px;align-items:center">
+                  ${this._remoteStatus ? html`
+                    <button
+                      class="sync-btn"
+                      ?disabled=${this._syncing}
+                      @click=${this._sync}
+                      title="Fetch, pull, and push"
+                    >${this._syncing ? 'Syncing…' : 'Sync'}</button>
+                  ` : ''}
+                  <button
+                    class="commit-btn"
+                    ?disabled=${staged.length === 0 || !this._commitMsg.trim() || this._committing}
+                    @click=${this._commit}
+                  >
+                    ${this._committing ? 'Committing…' : `Commit${staged.length > 0 ? ` ${staged.length}` : ''}`}
+                  </button>
+                </div>
               </div>
-              <button
-                class="identity-save-btn"
-                ?disabled=${!this._identityName.trim() || !this._identityEmail.trim() || this._savingIdentity}
-                @click=${this._saveIdentity}
-              >${this._savingIdentity ? 'Saving…' : 'Save & commit'}</button>
             </div>
           ` : ''}
-          <div class="commit-row">
-            <div class="branch-indicator">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
-                <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
+        </div>
+
+        <div class="collapsible-section">
+          <div class="section-header" @click=${() => { if (!this._filesOpen) this._loadFileTree(); this._filesOpen = !this._filesOpen; }}>
+            <div class="section-header-left">
+              <svg class="section-chevron ${this._filesOpen ? 'open' : ''}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 6 6 6-6 6"/>
               </svg>
-              ${branch}
-              ${this._remoteStatus ? html`
-                <span class="remote-counts">
-                  ${this._remoteStatus.ahead > 0 ? html`<span class="remote-ahead">↑${this._remoteStatus.ahead}</span>` : ''}
-                  ${this._remoteStatus.behind > 0 ? html`<span class="remote-behind">↓${this._remoteStatus.behind}</span>` : ''}
-                </span>
-              ` : ''}
+              <div class="section-title">Files</div>
             </div>
-            <div style="display:flex;gap:6px;align-items:center">
-              ${this._remoteStatus ? html`
-                <button
-                  class="sync-btn"
-                  ?disabled=${this._syncing}
-                  @click=${this._sync}
-                  title="Fetch, pull, and push"
-                >${this._syncing ? 'Syncing…' : 'Sync'}</button>
-              ` : ''}
-              <button
-                class="commit-btn"
-                ?disabled=${staged.length === 0 || !this._commitMsg.trim() || this._committing}
-                @click=${this._commit}
-              >
-                ${this._committing ? 'Committing…' : `Commit${staged.length > 0 ? ` ${staged.length}` : ''}`}
-              </button>
+            <div class="section-actions" @click=${e => e.stopPropagation()}>
+              <button class="icon-btn-sm" title="Refresh" @click=${this._loadFileTree}>${iconRefresh}</button>
             </div>
           </div>
+
+          ${this._filesOpen ? html`
+            <div class="file-tree">
+              ${this._filesLoading ? html`<div class="tree-empty">Loading…</div>` :
+                !this._fileTree || this._fileTree.length === 0
+                  ? html`<div class="tree-empty">No files</div>`
+                  : this._renderTreeNodes(this._fileTree)
+              }
+            </div>
+          ` : ''}
         </div>
       </div>
     `;

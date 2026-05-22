@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn, execFile } from 'child_process';
@@ -61,6 +61,38 @@ function persist() {
 
 function gitDir(id) {
   return `/data/${id}/git`;
+}
+
+const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', '__pycache__', 'dist', '.venv', 'venv']);
+
+function buildTree(dirPath, maxDepth = 6, depth = 0) {
+  if (depth >= maxDepth) return [];
+  let entries;
+  try {
+    entries = readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const result = [];
+  for (const entry of entries.sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  })) {
+    if (entry.name.startsWith('.') && entry.name !== '.env') continue;
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      result.push({ name: entry.name, type: 'dir', children: buildTree(join(dirPath, entry.name), maxDepth, depth + 1) });
+    } else {
+      result.push({ name: entry.name, type: 'file' });
+    }
+  }
+  return result;
+}
+
+export function getFileTree(id) {
+  const dir = gitDir(id);
+  if (!existsSync(dir)) return null;
+  return buildTree(dir);
 }
 
 function runGit(cwd, args) {

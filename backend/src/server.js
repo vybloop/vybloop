@@ -19,6 +19,7 @@ import {
   syncProject,
   getConfig,
   updateConfig,
+  getFileTree,
   TEMPLATES,
 } from './data.js';
 
@@ -103,6 +104,14 @@ app.post('/api/projects/:id/changes/:fileId/toggle', async (req, res) => {
   const result = await toggleStage(req.params.id, req.params.fileId);
   if (!result) return res.status(404).json({ error: 'file not found' });
   res.json(result);
+});
+
+app.get('/api/projects/:id/files', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const tree = getFileTree(req.params.id);
+  if (tree === null) return res.json([]);
+  res.json(tree);
 });
 
 app.get('/api/templates', (req, res) => {
