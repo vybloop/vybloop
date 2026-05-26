@@ -91,6 +91,7 @@ class LoopHomeScreen extends LitElement {
     .search-input {
       width: 100%;
       height: 34px;
+      box-sizing: border-box;
       background: var(--bg-2);
       border: 1px solid var(--line-soft);
       border-radius: var(--radius);
