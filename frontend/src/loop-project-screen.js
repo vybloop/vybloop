@@ -1248,6 +1248,9 @@ class LoopProjectScreen extends LitElement {
     this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
     this._fileChangeListeners = new Map(); // path -> IDisposable
     this._diffModels = new Map();       // tabId -> { original, modified } ITextModel pair
+    this._diffMtimes = new Map();       // tabId -> server mtime
+    this._diffCleanVersions = new Map(); // tabId -> alternativeVersionId at last save/load
+    this._diffChangeListeners = new Map(); // tabId -> IDisposable
     this._monacoEditor = null;
     this._monacoDiffEditor = null;
     this._pollInterval = null;
@@ -1353,6 +1356,10 @@ class LoopProjectScreen extends LitElement {
     this._fileModels.clear();
     this._diffModels.forEach(({ original, modified }) => { original?.dispose(); modified?.dispose(); });
     this._diffModels.clear();
+    this._diffChangeListeners.forEach(d => d.dispose());
+    this._diffChangeListeners.clear();
+    this._diffMtimes.clear();
+    this._diffCleanVersions.clear();
     this._monacoEditor?.dispose();
     this._monacoEditor = null;
     this._monacoDiffEditor?.dispose();
@@ -1800,7 +1807,7 @@ class LoopProjectScreen extends LitElement {
     }
     // Add tab immediately
     if (!this._openDiffs.find(d => d.tabId === tabId)) {
-      this._openDiffs = [...this._openDiffs, { tabId, path: file.path, staged: file.staged }];
+      this._openDiffs = [...this._openDiffs, { tabId, path: file.path, staged: file.staged, dirty: false }];
     }
     this._activeTab = tabId;
 
@@ -1808,13 +1815,26 @@ class LoopProjectScreen extends LitElement {
       const params = new URLSearchParams({ path: file.path, staged: String(file.staged) });
       const res = await fetch(`/api/projects/${this.project.id}/diff?${params}`);
       if (!res.ok) { this._closeDiff(tabId); return; }
-      const { original, modified } = await res.json();
+      const { original, modified, mtime } = await res.json();
       const lang = detectLanguage(file.path);
+      const modifiedModel = monaco.editor.createModel(modified, lang);
       const models = {
         original: monaco.editor.createModel(original, lang),
-        modified: monaco.editor.createModel(modified, lang),
+        modified: modifiedModel,
       };
       this._diffModels.set(tabId, models);
+      this._diffMtimes.set(tabId, mtime ?? 0);
+      this._diffCleanVersions.set(tabId, modifiedModel.getAlternativeVersionId());
+
+      const listener = modifiedModel.onDidChangeContent(() => {
+        const isDirty = modifiedModel.getAlternativeVersionId() !== this._diffCleanVersions.get(tabId);
+        const entry = this._openDiffs.find(d => d.tabId === tabId);
+        if (entry && entry.dirty !== isDirty) {
+          this._openDiffs = this._openDiffs.map(d => d.tabId === tabId ? { ...d, dirty: isDirty } : d);
+        }
+      });
+      this._diffChangeListeners.set(tabId, listener);
+
       if (this._activeTab === tabId) {
         this._ensureMonacoDiff();
         if (this._monacoDiffEditor) this._monacoDiffEditor.setModel(models);
@@ -1830,6 +1850,10 @@ class LoopProjectScreen extends LitElement {
     const models = this._diffModels.get(tabId);
     if (models) { models.original?.dispose(); models.modified?.dispose(); }
     this._diffModels.delete(tabId);
+    this._diffChangeListeners.get(tabId)?.dispose();
+    this._diffChangeListeners.delete(tabId);
+    this._diffMtimes.delete(tabId);
+    this._diffCleanVersions.delete(tabId);
     const remaining = this._openDiffs.filter(d => d.tabId !== tabId);
     this._openDiffs = remaining;
     if (this._activeTab === tabId) {
@@ -1859,10 +1883,14 @@ class LoopProjectScreen extends LitElement {
       fontLigatures: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      readOnly: true,
       renderSideBySide: true,
       ignoreTrimWhitespace: false,
+      originalEditable: false,
     });
+    this._monacoDiffEditor.getModifiedEditor().addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+      () => { if (this._isDiffTab(this._activeTab)) this._saveDiffFile(this._activeTab); }
+    );
     this._monacoDiffEditor.layout({ width, height });
     new ResizeObserver(() => {
       const r = container.getBoundingClientRect();
@@ -1901,6 +1929,37 @@ class LoopProjectScreen extends LitElement {
       }
     } catch (e) {
       console.error('Failed to save file', e);
+    }
+  }
+
+  async _saveDiffFile(tabId, force = false) {
+    const diff = this._openDiffs.find(d => d.tabId === tabId);
+    if (!diff) return;
+    const models = this._diffModels.get(tabId);
+    if (!models) return;
+    const content = models.modified.getValue();
+    const mtime = this._diffMtimes.get(tabId) ?? 0;
+    try {
+      const res = await fetch(
+        `/api/projects/${this.project.id}/file?path=${encodeURIComponent(diff.path)}`,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content, mtime, force }) }
+      );
+      if (res.status === 409) {
+        const { mtime: externalMtime } = await res.json();
+        this._dialog = { type: 'save-diff-conflict', tabId, path: diff.path, externalMtime };
+        return;
+      }
+      if (res.ok) {
+        const { mtime: newMtime } = await res.json();
+        this._diffMtimes.set(tabId, newMtime);
+        this._diffCleanVersions.set(tabId, models.modified.getAlternativeVersionId());
+        this._openDiffs = this._openDiffs.map(d => d.tabId === tabId ? { ...d, dirty: false } : d);
+        this._dialog = null;
+        this._loadChanges();
+      }
+    } catch (e) {
+      console.error('Failed to save diff file', e);
     }
   }
 
@@ -2014,6 +2073,17 @@ class LoopProjectScreen extends LitElement {
         <div class="dialog-actions">
           <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
           <button class="dialog-btn dialog-btn-danger" @click=${() => this._saveFile(d.path, true)}>Overwrite</button>
+        </div>
+      `;
+    }
+    if (d.type === 'save-diff-conflict') {
+      const filename = d.path.split('/').pop();
+      return html`
+        <div class="dialog-title">File Changed Externally</div>
+        <div class="dialog-body"><strong>${filename}</strong> was modified since you opened it. Overwrite with your changes?</div>
+        <div class="dialog-actions">
+          <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
+          <button class="dialog-btn dialog-btn-danger" @click=${() => this._saveDiffFile(d.tabId, true)}>Overwrite</button>
         </div>
       `;
     }
@@ -2724,7 +2794,7 @@ class LoopProjectScreen extends LitElement {
                   </div>
                 `;
               })}
-              ${this._openDiffs.map(({ tabId, path }) => {
+              ${this._openDiffs.map(({ tabId, path, dirty }) => {
                 const filename = path.split('/').pop();
                 return html`
                   <div
@@ -2734,6 +2804,7 @@ class LoopProjectScreen extends LitElement {
                   >
                     <span class="file-tab-name">${filename}</span>
                     <span class="diff-tab-badge">diff</span>
+                    ${dirty ? html`<span class="file-tab-dirty" title="Unsaved changes"></span>` : ''}
                     <span class="tab-close" @click=${(e) => this._closeDiff(tabId, e)}>
                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M18 6 6 18M6 6l12 12"/>

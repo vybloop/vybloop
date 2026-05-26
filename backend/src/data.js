@@ -164,7 +164,10 @@ export async function getFileDiff(id, filePath, staged) {
     try { modified = readFileSync(abs, 'utf8'); } catch { modified = ''; }
   }
 
-  return { original, modified };
+  let mtime = 0;
+  try { mtime = statSync(abs).mtimeMs; } catch { /* file may not exist on disk */ }
+
+  return { original, modified, mtime };
 }
 
 function runGit(cwd, args) {
