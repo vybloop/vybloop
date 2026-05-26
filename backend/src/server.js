@@ -29,6 +29,7 @@ import {
   TEMPLATES,
 } from './data.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts } from './file-watcher.js';
+import { startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -106,6 +107,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
   if (isRunning) {
     setProjectStatus(id, 'idle');
     res.json({ status: 'idle' });
+    stopLogCapture(id);
     execFile('podman', ['compose', 'down'], { cwd: repoPath }, (err) => {
       if (err) {
         console.error(`[compose] down failed for ${id}:`, err.message);
@@ -122,6 +124,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
         setProjectStatus(id, 'error');
         broadcastStatus(id, 'error');
       } else {
+        startLogCapture(id, repoPath);
         try {
           const ports = await getContainerPorts(repoPath);
           broadcastPorts(id, ports);
@@ -141,6 +144,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
   const id = req.params.id;
   const repoPath = `/data/${id}/git`;
   res.json({ status: 'running' });
+  stopLogCapture(id);
   execFile('podman', ['compose', 'down'], { cwd: repoPath }, (downErr) => {
     if (downErr) {
       console.error(`[compose] restart/down failed for ${id}:`, downErr.message);
@@ -154,6 +158,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
         setProjectStatus(id, 'error');
         broadcastStatus(id, 'error');
       } else {
+        startLogCapture(id, repoPath);
         try {
           const ports = await getContainerPorts(repoPath);
           broadcastPorts(id, ports);
@@ -299,6 +304,18 @@ app.patch('/api/config', (req, res) => {
   res.json(result);
 });
 
+app.get('/api/projects/:id/logs', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  getOrCreateBuffer(req.params.id).addClient(res);
+});
+
 app.get('/api/projects/:id/events', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
@@ -432,6 +449,7 @@ async function restoreComposeStates() {
       const { stdout } = await execFileAsync('podman', ['compose', 'ps', '-q'], { cwd: repoPath });
       if (stdout.trim()) {
         setProjectStatus(p.id, 'running');
+        startLogCapture(p.id, repoPath);
         console.log(`[compose] restored running state for ${p.id}`);
       }
     } catch {

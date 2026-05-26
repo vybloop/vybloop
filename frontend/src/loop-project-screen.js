@@ -77,6 +77,7 @@ class LoopProjectScreen extends LitElement {
     _dialog: { state: true },
     _ports: { state: true },
     _runMenuOpen: { state: true },
+    _logEmpty: { state: true },
   };
 
   static styles = [css`
@@ -989,6 +990,53 @@ class LoopProjectScreen extends LitElement {
         padding: 10px;
       }
     }
+    /* Log view */
+    .log-view {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-0);
+    }
+    .log-pre {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      margin: 0;
+      font-family: "Cascadia Code", ui-monospace, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--fg-1);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .log-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--fg-3);
+      font-size: 13px;
+      font-family: var(--font-sans);
+    }
+    .log-scroll-btn {
+      position: absolute;
+      bottom: 12px;
+      right: 16px;
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      font-size: 11px;
+      font-family: var(--font-sans);
+      padding: 4px 10px;
+      cursor: pointer;
+      z-index: 5;
+      transition: background 0.1s;
+    }
+    .log-scroll-btn:hover { background: var(--bg-2); }
+
     /* Mobile input FAB + bar */
     :host {
       position: relative;
@@ -1107,6 +1155,11 @@ class LoopProjectScreen extends LitElement {
     this._ports = [];
     this._runMenuOpen = false;
     this._dialog = null;    // null | { type, ...data }
+    this._logLines = [];
+    this._logAutoScroll = true;
+    this._logUpdated = false;
+    this._logSse = null;
+    this._logEmpty = true;
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileMtimes = new Map();       // path -> server mtime
     this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
@@ -1146,7 +1199,24 @@ class LoopProjectScreen extends LitElement {
     if (changed.has('_running') && !this._running) {
       this._ports = [];
     }
+    if (this._logUpdated) {
+      this._logUpdated = false;
+      if (this._logAutoScroll) {
+        requestAnimationFrame(() => {
+          const el = this.shadowRoot?.querySelector('.log-pre');
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      }
+    }
     if (changed.has('_activeTab')) {
+      if (this._activeTab === 'logs') {
+        this._connectLogs();
+        this._logAutoScroll = true;
+        requestAnimationFrame(() => {
+          const el = this.shadowRoot?.querySelector('.log-pre');
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      }
       if (this._activeTab === 'agent') {
         requestAnimationFrame(() => this._termFit?.fit());
       }
@@ -1183,6 +1253,8 @@ class LoopProjectScreen extends LitElement {
     this._mq?.removeEventListener('change', this._mqHandler);
     this._sse?.close();
     this._sse = null;
+    this._logSse?.close();
+    this._logSse = null;
     this._termDataDisposable?.dispose();
     this._termResizeDisposable?.dispose();
     this._termWs?.close();
@@ -1334,6 +1406,30 @@ class LoopProjectScreen extends LitElement {
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
     this._sse.addEventListener('status', (e) => { this._running = JSON.parse(e.data).status === 'running'; });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
+  }
+
+  _connectLogs() {
+    if (this._logSse || !this.project || !this.isConnected) return;
+    this._logSse = new EventSource(`/api/projects/${this.project.id}/logs`);
+    this._logSse.addEventListener('snapshot', (e) => {
+      const text = JSON.parse(e.data);
+      this._logLines = text ? text.split('\n') : [];
+      this._logEmpty = this._logLines.length === 0;
+      this._logUpdated = true;
+      this.requestUpdate();
+    });
+    this._logSse.addEventListener('line', (e) => {
+      this._logLines.push(JSON.parse(e.data));
+      this._logEmpty = false;
+      this._logUpdated = true;
+      this.requestUpdate();
+    });
+    this._logSse.onerror = () => {
+      this._logSse?.close();
+      this._logSse = null;
+      // Reconnect after a delay
+      if (this.project) setTimeout(() => this._connectLogs(), 3000);
+    };
   }
 
   _isFilePath(tab) {
@@ -2156,16 +2252,27 @@ class LoopProjectScreen extends LitElement {
     `;
   }
 
-  _renderLogsPlaceholder() {
+  _onLogScroll(e) {
+    const el = e.target;
+    this._logAutoScroll = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+  }
+
+  _scrollLogsToBottom() {
+    const el = this.shadowRoot?.querySelector('.log-pre');
+    if (el) { el.scrollTop = el.scrollHeight; this._logAutoScroll = true; }
+  }
+
+  _renderLogs() {
+    const logText = this._logLines.join('\n');
     return html`
-      <div class="terminal-body" style="color:var(--fg-3)">
-        <div style="font-family:var(--font-mono);font-size:12px;line-height:1.8">
-          <div><span style="color:var(--fg-3)">12:41:03</span> <span style="color:var(--add)">info</span>  Server started on port 3000</div>
-          <div><span style="color:var(--fg-3)">12:41:03</span> <span style="color:var(--add)">info</span>  Watching for changes…</div>
-          <div><span style="color:var(--fg-3)">12:41:47</span> <span style="color:var(--mod)">reload</span> src/editor/Toolbar.tsx</div>
-          <div><span style="color:var(--fg-3)">12:41:47</span> <span style="color:var(--mod)">reload</span> src/editor/commands/insertLink.ts</div>
-          <span class="cursor-blink"></span>
-        </div>
+      <div class="log-view" style="position:relative">
+        ${this._logEmpty
+          ? html`<div class="log-empty">No logs yet — start the container to see output</div>`
+          : html`<pre class="log-pre" @scroll=${this._onLogScroll}>${logText}</pre>`
+        }
+        ${!this._logAutoScroll && !this._logEmpty ? html`
+          <button class="log-scroll-btn" @click=${this._scrollLogsToBottom}>↓ Follow</button>
+        ` : ''}
       </div>
     `;
   }
@@ -2279,7 +2386,9 @@ class LoopProjectScreen extends LitElement {
           <div class="terminal-body" style="display:${this._activeTab === 'agent' ? 'flex' : 'none'};padding:0;overflow:hidden">
             <div id="xterm-container"></div>
           </div>
-          ${this._activeTab === 'logs' ? this._renderLogsPlaceholder() : ''}
+          <div style="display:${this._activeTab === 'logs' ? 'flex' : 'none'};flex:1;min-height:0">
+            ${this._activeTab === 'logs' || this._logSse ? this._renderLogs() : ''}
+          </div>
           ${this._activeTab === 'shell' ? this._renderShellPlaceholder() : ''}
           ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
           <div id="monaco-container" style="display:${this._isFilePath(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
