@@ -109,6 +109,21 @@ export function getFileContent(id, filePath) {
   }
 }
 
+export function getImageContent(id, filePath) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const abs = resolve(base, normalize(filePath));
+  if (!abs.startsWith(base + '/') && abs !== base) return null;
+  try {
+    const stat = statSync(abs);
+    if (!stat.isFile()) return null;
+    const data = readFileSync(abs);
+    return { data };
+  } catch {
+    return null;
+  }
+}
+
 export function saveFileContent(id, filePath, content, mtime, force = false) {
   const base = gitDir(id);
   if (!existsSync(base)) return null;

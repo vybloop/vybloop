@@ -44,6 +44,8 @@ function detectLanguage(filename) {
   return LANG_MAP[ext] ?? 'plaintext';
 }
 
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']);
+
 const _isMac = /Macintosh|MacIntel/.test(navigator.userAgent);
 const _modKey = _isMac ? '⌘' : 'Ctrl-';
 
@@ -74,6 +76,7 @@ class LoopProjectScreen extends LitElement {
     _expandedDirs: { state: true },
     _openFiles: { state: true },
     _openDiffs: { state: true },
+    _openImages: { state: true },
     _dialog: { state: true },
     _ports: { state: true },
     _runMenuOpen: { state: true },
@@ -1226,6 +1229,7 @@ class LoopProjectScreen extends LitElement {
     this._expandedDirs = new Set();
     this._openFiles = [];   // [{ path, dirty }]
     this._openDiffs = [];   // [{ tabId, path, staged }]
+    this._openImages = [];  // string[] paths
     this._ports = [];
     this._runMenuOpen = false;
     this._dialog = null;    // null | { type, ...data }
@@ -1605,9 +1609,12 @@ class LoopProjectScreen extends LitElement {
         // Close any open file tabs for the renamed path
         if (!isDir) {
           if (this._openFiles.some(f => f.path === oldPath)) this._confirmClose(oldPath);
+          if (this._openImages.includes(oldPath)) this._closeImage(oldPath);
         } else {
           const affected = this._openFiles.filter(f => f.path.startsWith(oldPath + '/'));
           affected.forEach(f => this._confirmClose(f.path));
+          const affectedImages = this._openImages.filter(p => p.startsWith(oldPath + '/'));
+          affectedImages.forEach(p => this._closeImage(p));
         }
         await this._loadFileTree();
         this._loadChanges();
@@ -1630,9 +1637,12 @@ class LoopProjectScreen extends LitElement {
         // Close any open file tabs for the deleted path
         if (!isDir) {
           if (this._openFiles.some(f => f.path === path)) this._confirmClose(path);
+          if (this._openImages.includes(path)) this._closeImage(path);
         } else {
           const affected = this._openFiles.filter(f => f.path === path || f.path.startsWith(path + '/'));
           affected.forEach(f => this._confirmClose(f.path));
+          const affectedImages = this._openImages.filter(p => p === path || p.startsWith(path + '/'));
+          affectedImages.forEach(p => this._closeImage(p));
         }
         await this._loadFileTree();
         this._loadChanges();
@@ -1675,8 +1685,17 @@ class LoopProjectScreen extends LitElement {
     };
   }
 
+  _isImageFile(path) {
+    const ext = path.split('.').pop()?.toLowerCase() ?? '';
+    return IMAGE_EXTENSIONS.has(ext);
+  }
+
+  _isImageTab(tab) {
+    return this._openImages.includes(tab);
+  }
+
   _isFilePath(tab) {
-    return !['agent', 'logs', 'shell', 'changes'].includes(tab) && !this._isDiffTab(tab);
+    return !['agent', 'logs', 'shell', 'changes'].includes(tab) && !this._isDiffTab(tab) && !this._isImageTab(tab);
   }
 
   _isDiffTab(tab) {
@@ -1688,6 +1707,13 @@ class LoopProjectScreen extends LitElement {
   }
 
   async _openFile(filePath) {
+    if (this._isImageFile(filePath)) {
+      if (!this._openImages.includes(filePath)) {
+        this._openImages = [...this._openImages, filePath];
+      }
+      this._activeTab = filePath;
+      return;
+    }
     // If already open, just switch to it
     if (this._fileModels.has(filePath)) {
       this._activeTab = filePath;
@@ -1754,6 +1780,15 @@ class LoopProjectScreen extends LitElement {
       this._activeTab = remaining.length > 0 ? remaining.at(-1).path : 'agent';
     }
     this._dialog = null;
+  }
+
+  _closeImage(path, e) {
+    e?.stopPropagation();
+    const remaining = this._openImages.filter(p => p !== path);
+    this._openImages = remaining;
+    if (this._activeTab === path) {
+      this._activeTab = remaining.length > 0 ? remaining.at(-1) : 'agent';
+    }
   }
 
   async _openDiff(file) {
@@ -2707,6 +2742,23 @@ class LoopProjectScreen extends LitElement {
                   </div>
                 `;
               })}
+              ${this._openImages.map(path => {
+                const filename = path.split('/').pop();
+                return html`
+                  <div
+                    class="tab file-tab ${this._activeTab === path ? 'active' : ''}"
+                    @click=${() => this._activeTab = path}
+                    @auxclick=${(e) => e.button === 1 && this._closeImage(path, e)}
+                  >
+                    <span class="file-tab-name">${filename}</span>
+                    <span class="tab-close" @click=${(e) => this._closeImage(path, e)}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 6 6 18M6 6l12 12"/>
+                      </svg>
+                    </span>
+                  </div>
+                `;
+              })}
             </div>
             <div class="${this._running ? 'connection-chip' : 'connection-chip idle-chip'}">
               <span class="dot"></span>
@@ -2724,6 +2776,15 @@ class LoopProjectScreen extends LitElement {
           ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
           <div id="monaco-container" style="display:${this._isFilePath(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
           <div id="diff-container" style="display:${this._isDiffTab(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
+          ${this._isImageTab(this._activeTab) ? html`
+            <div style="display:flex;flex:1;min-height:0;align-items:center;justify-content:center;padding:16px;overflow:hidden">
+              <img
+                src="/api/projects/${this.project.id}/image?path=${encodeURIComponent(this._activeTab)}"
+                style="max-width:100%;max-height:100%;object-fit:contain;width:100%;height:100%;image-rendering: pixelated"
+                alt=${this._activeTab.split('/').pop()}
+              >
+            </div>
+          ` : ''}
 
         </div>
       </div>

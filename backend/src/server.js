@@ -3,7 +3,7 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, extname } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { TerminalSession, DirectSession } from './terminal-session.js';
@@ -24,6 +24,7 @@ import {
   updateConfig,
   getFileTree,
   getFileContent,
+  getImageContent,
   saveFileContent,
   getFileDiff,
   uploadFiles,
@@ -241,6 +242,24 @@ app.get('/api/projects/:id/file', async (req, res) => {
   const result = getFileContent(req.params.id, filePath);
   if (!result) return res.status(404).json({ error: 'file not found' });
   res.json(result);
+});
+
+const IMAGE_MIME_TYPES = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif',
+};
+
+app.get('/api/projects/:id/image', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path is required' });
+  const result = getImageContent(req.params.id, filePath);
+  if (!result) return res.status(404).json({ error: 'file not found' });
+  const mime = IMAGE_MIME_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+  res.setHeader('Content-Type', mime);
+  res.send(result.data);
 });
 
 app.post('/api/projects/:id/upload', async (req, res) => {
