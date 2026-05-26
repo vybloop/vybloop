@@ -1276,8 +1276,10 @@ class LoopProjectScreen extends LitElement {
       this._loadChanges();
       this._loadFileTree();
       this._connectSse();
-      // Connect the terminal once the project arrives (terminal is already initialized)
-      if (this._term && !this._termWs) this._connectWs();
+      // If project arrived after firstUpdated (e.g. page refresh), #xterm-container
+      // wasn't in the DOM yet when firstUpdated ran, so initialize now.
+      if (!this._term) this._initTerminal();
+      else if (!this._termWs) this._connectWs();
     }
     if (changed.has('project') && this.project?.status === 'running') {
       this._fetchPorts();
