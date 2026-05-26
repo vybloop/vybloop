@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join, resolve, normalize } from 'path';
+import { dirname, join, resolve, normalize, basename } from 'path';
 import { spawn, execFile } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -454,6 +454,30 @@ export function updateConfig(updates) {
     applyGitAuthor(config.gitName, config.gitEmail);
   }
   return { ...config };
+}
+
+export function uploadFiles(id, dir, files) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const targetDir = dir ? resolve(base, normalize(dir)) : base;
+  if (!targetDir.startsWith(base + '/') && targetDir !== base) return { error: 'invalid directory' };
+  const results = [];
+  for (const { name, content } of files) {
+    const safeName = basename(name);
+    if (!safeName || safeName === '.' || safeName === '..') {
+      results.push({ name, ok: false, error: 'invalid filename' });
+      continue;
+    }
+    const filePath = join(targetDir, safeName);
+    try {
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, Buffer.from(content, 'base64'));
+      results.push({ name: safeName, ok: true });
+    } catch (e) {
+      results.push({ name: safeName, ok: false, error: e.message });
+    }
+  }
+  return { ok: true, results };
 }
 
 export async function toggleStage(id, fileId) {

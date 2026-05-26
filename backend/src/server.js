@@ -26,6 +26,7 @@ import {
   getFileContent,
   saveFileContent,
   getFileDiff,
+  uploadFiles,
   TEMPLATES,
 } from './data.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts } from './file-watcher.js';
@@ -236,6 +237,17 @@ app.get('/api/projects/:id/file', async (req, res) => {
   if (!filePath) return res.status(400).json({ error: 'path is required' });
   const result = getFileContent(req.params.id, filePath);
   if (!result) return res.status(404).json({ error: 'file not found' });
+  res.json(result);
+});
+
+app.post('/api/projects/:id/upload', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const { dir = '', files } = req.body;
+  if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: 'files required' });
+  const result = uploadFiles(req.params.id, dir, files);
+  if (!result) return res.status(404).json({ error: 'project not found' });
+  if (result.error) return res.status(400).json(result);
   res.json(result);
 });
 

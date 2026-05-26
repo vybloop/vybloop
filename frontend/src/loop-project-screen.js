@@ -78,6 +78,9 @@ class LoopProjectScreen extends LitElement {
     _ports: { state: true },
     _runMenuOpen: { state: true },
     _logEmpty: { state: true },
+    _dragOverFiles: { state: true },
+    _dropTargetDir: { state: true },
+    _uploading: { state: true },
   };
 
   static styles = [css`
@@ -478,6 +481,27 @@ class LoopProjectScreen extends LitElement {
       text-align: center;
       color: var(--fg-3);
       font-size: 12px;
+    }
+    .file-tree.drag-over {
+      background: oklch(0.84 0.18 130 / 0.05);
+      outline: 2px dashed var(--accent);
+      outline-offset: -4px;
+      border-radius: 4px;
+      min-height: 40px;
+    }
+    .tree-node.drop-target {
+      background: var(--accent-soft);
+      outline: 1px solid oklch(0.84 0.18 130 / 0.4);
+      outline-offset: -1px;
+      border-radius: 3px;
+    }
+    .upload-hint {
+      padding: 6px 12px 8px;
+      font-size: 11px;
+      color: var(--accent);
+      font-family: var(--font-sans);
+      font-style: italic;
+      pointer-events: none;
     }
 
     /* Commit box */
@@ -1160,6 +1184,9 @@ class LoopProjectScreen extends LitElement {
     this._logUpdated = false;
     this._logSse = null;
     this._logEmpty = true;
+    this._dragOverFiles = false;
+    this._dropTargetDir = null;
+    this._uploading = false;
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileMtimes = new Map();       // path -> server mtime
     this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
@@ -1397,6 +1424,59 @@ class LoopProjectScreen extends LitElement {
     } finally {
       this._filesLoading = false;
     }
+  }
+
+  async _uploadFiles(files, dirPath) {
+    if (!files.length || !this.project) return;
+    this._uploading = true;
+    try {
+      const uploads = await Promise.all(Array.from(files).map(async (file) => {
+        const arrayBuffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        const chunk = 8192;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        return { name: file.name, content: btoa(binary) };
+      }));
+      await fetch(`/api/projects/${this.project.id}/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: dirPath ?? '', files: uploads }),
+      });
+      await this._loadFileTree();
+      this._loadChanges();
+    } catch (e) {
+      console.error('Upload failed', e);
+    } finally {
+      this._uploading = false;
+    }
+  }
+
+  _onTreeDragOver(e, dirPath) {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    this._dragOverFiles = true;
+    this._dropTargetDir = dirPath;
+  }
+
+  _onTreeDragLeave(e) {
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      this._dragOverFiles = false;
+      this._dropTargetDir = null;
+    }
+  }
+
+  _onTreeDrop(e) {
+    e.preventDefault();
+    const dir = this._dropTargetDir;
+    this._dragOverFiles = false;
+    this._dropTargetDir = null;
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length) this._uploadFiles(files, dir);
   }
 
   _connectSse() {
@@ -1968,8 +2048,11 @@ class LoopProjectScreen extends LitElement {
       const nodePath = parentPath ? `${parentPath}/${node.name}` : node.name;
       if (node.type === 'dir') {
         const open = this._expandedDirs.has(nodePath);
+        const isDropTarget = this._dropTargetDir === nodePath;
         return html`
-          <div class="tree-node" style="padding-left:${12 + indent}px">
+          <div class="tree-node ${isDropTarget ? 'drop-target' : ''}" style="padding-left:${12 + indent}px"
+            @dragover=${(e) => this._onTreeDragOver(e, nodePath)}
+          >
             <button class="tree-dir-toggle" @click=${(e) => { e.stopPropagation(); this._toggleDir(nodePath); }}>
               <svg class="tree-dir-chevron ${open ? 'open' : ''}" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m9 6 6 6-6 6"/>
@@ -2182,12 +2265,25 @@ class LoopProjectScreen extends LitElement {
           </div>
 
           ${this._filesOpen ? html`
-            <div class="file-tree">
+            <div class="file-tree ${this._dragOverFiles ? 'drag-over' : ''}"
+              @dragover=${(e) => this._onTreeDragOver(e, null)}
+              @dragleave=${(e) => this._onTreeDragLeave(e)}
+              @drop=${(e) => this._onTreeDrop(e)}
+            >
               ${this._filesLoading ? html`<div class="tree-empty">Loading…</div>` :
                 !this._fileTree || this._fileTree.length === 0
-                  ? html`<div class="tree-empty">No files</div>`
+                  ? html`<div class="tree-empty">${this._dragOverFiles ? 'Drop to upload' : 'No files'}</div>`
                   : this._renderTreeNodes(this._fileTree)
               }
+              ${this._dragOverFiles ? html`
+                <div class="upload-hint">
+                  ${this._dropTargetDir
+                    ? `Drop to upload into ${this._dropTargetDir}/`
+                    : 'Drop to upload to project root'
+                  }
+                </div>
+              ` : ''}
+              ${this._uploading ? html`<div class="tree-empty">Uploading…</div>` : ''}
             </div>
           ` : ''}
         </div>
