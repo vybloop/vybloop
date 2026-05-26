@@ -27,6 +27,9 @@ import {
   saveFileContent,
   getFileDiff,
   uploadFiles,
+  createFolder,
+  renameItem,
+  deleteItem,
   TEMPLATES,
 } from './data.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts } from './file-watcher.js';
@@ -262,6 +265,39 @@ app.put('/api/projects/:id/file', async (req, res) => {
   if (!result) return res.status(404).json({ error: 'project not found' });
   if (result.conflict) return res.status(409).json(result);
   if (result.error) return res.status(500).json(result);
+  res.json(result);
+});
+
+app.post('/api/projects/:id/fs/mkdir', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const { path } = req.body;
+  if (!path) return res.status(400).json({ error: 'path is required' });
+  const result = createFolder(req.params.id, path);
+  if (!result) return res.status(404).json({ error: 'project not found' });
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/projects/:id/fs/rename', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const { oldPath, newPath } = req.body;
+  if (!oldPath || !newPath) return res.status(400).json({ error: 'oldPath and newPath are required' });
+  const result = renameItem(req.params.id, oldPath, newPath);
+  if (!result) return res.status(404).json({ error: 'project not found' });
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/projects/:id/fs/delete', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const { path } = req.body;
+  if (!path) return res.status(400).json({ error: 'path is required' });
+  const result = deleteItem(req.params.id, path);
+  if (!result) return res.status(404).json({ error: 'project not found' });
+  if (result.error) return res.status(400).json(result);
   res.json(result);
 });
 

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync, rmSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve, normalize, basename } from 'path';
 import { spawn, execFile } from 'child_process';
@@ -478,6 +478,47 @@ export function uploadFiles(id, dir, files) {
     }
   }
   return { ok: true, results };
+}
+
+export function createFolder(id, dirPath) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const abs = resolve(base, normalize(dirPath));
+  if (!abs.startsWith(base + '/') && abs !== base) return { error: 'invalid path' };
+  try {
+    mkdirSync(abs, { recursive: true });
+    return { ok: true };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+export function renameItem(id, oldPath, newPath) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const absOld = resolve(base, normalize(oldPath));
+  const absNew = resolve(base, normalize(newPath));
+  if (!absOld.startsWith(base + '/') && absOld !== base) return { error: 'invalid path' };
+  if (!absNew.startsWith(base + '/') && absNew !== base) return { error: 'invalid path' };
+  try {
+    renameSync(absOld, absNew);
+    return { ok: true };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+export function deleteItem(id, itemPath) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const abs = resolve(base, normalize(itemPath));
+  if (!abs.startsWith(base + '/') && abs !== base) return { error: 'invalid path' };
+  try {
+    rmSync(abs, { recursive: true, force: true });
+    return { ok: true };
+  } catch (e) {
+    return { error: e.message };
+  }
 }
 
 export async function toggleStage(id, fileId) {
