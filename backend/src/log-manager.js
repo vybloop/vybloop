@@ -60,7 +60,7 @@ export function startLogCapture(projectId, repoPath) {
   const buf = new LogBuffer();
   buffers.set(projectId, buf);
 
-  const proc = spawn('podman', ['compose', 'logs', '-f'], { cwd: repoPath });
+  const proc = spawn('podman', ['compose', '-p', projectId, 'logs', '-f'], { cwd: repoPath });
   procs.set(projectId, proc);
 
   let pending = '';

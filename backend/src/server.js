@@ -38,8 +38,8 @@ import { startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manage
 
 const execFileAsync = promisify(execFile);
 
-async function getContainerPorts(repoPath) {
-  const { stdout: idsOut } = await execFileAsync('podman', ['compose', 'ps', '-q'], { cwd: repoPath });
+async function getContainerPorts(projectId, repoPath) {
+  const { stdout: idsOut } = await execFileAsync('podman', ['compose', '-p', projectId, 'ps', '-q'], { cwd: repoPath });
   const ids = idsOut.trim().split('\n').filter(Boolean);
   const ports = [];
   for (const containerId of ids) {
@@ -113,7 +113,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
     setProjectStatus(id, 'idle');
     res.json({ status: 'idle' });
     stopLogCapture(id);
-    execFile('podman', ['compose', 'down'], { cwd: repoPath }, (err) => {
+    execFile('podman', ['compose', '-p', id, 'down'], { cwd: repoPath }, (err) => {
       if (err) {
         console.error(`[compose] down failed for ${id}:`, err.message);
         setProjectStatus(id, 'error');
@@ -123,7 +123,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
   } else {
     setProjectStatus(id, 'running');
     res.json({ status: 'running' });
-    execFile('podman', ['compose', 'up', '--build', '-d'], { cwd: repoPath }, async (err) => {
+    execFile('podman', ['compose', '-p', id, 'up', '--build', '-d'], { cwd: repoPath }, async (err) => {
       if (err) {
         console.error(`[compose] up failed for ${id}:`, err.message);
         setProjectStatus(id, 'error');
@@ -131,7 +131,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
       } else {
         startLogCapture(id, repoPath);
         try {
-          const ports = await getContainerPorts(repoPath);
+          const ports = await getContainerPorts(id, repoPath);
           broadcastPorts(id, ports);
         } catch (e) {
           console.error(`[compose] port detection failed for ${id}:`, e.message);
@@ -150,14 +150,14 @@ app.post('/api/projects/:id/restart', async (req, res) => {
   const repoPath = `/data/${id}/git`;
   res.json({ status: 'running' });
   stopLogCapture(id);
-  execFile('podman', ['compose', 'down'], { cwd: repoPath }, (downErr) => {
+  execFile('podman', ['compose', '-p', id, 'down'], { cwd: repoPath }, (downErr) => {
     if (downErr) {
       console.error(`[compose] restart/down failed for ${id}:`, downErr.message);
       setProjectStatus(id, 'error');
       broadcastStatus(id, 'error');
       return;
     }
-    execFile('podman', ['compose', 'up', '--build', '-d'], { cwd: repoPath }, async (upErr) => {
+    execFile('podman', ['compose', '-p', id, 'up', '--build', '-d'], { cwd: repoPath }, async (upErr) => {
       if (upErr) {
         console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
         setProjectStatus(id, 'error');
@@ -165,7 +165,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
       } else {
         startLogCapture(id, repoPath);
         try {
-          const ports = await getContainerPorts(repoPath);
+          const ports = await getContainerPorts(id, repoPath);
           broadcastPorts(id, ports);
         } catch (e) {
           console.error(`[compose] port detection failed for ${id}:`, e.message);
@@ -179,7 +179,7 @@ app.get('/api/projects/:id/ports', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
   try {
-    res.json(await getContainerPorts(`/data/${req.params.id}/git`));
+    res.json(await getContainerPorts(req.params.id, `/data/${req.params.id}/git`));
   } catch {
     res.json([]);
   }
@@ -513,7 +513,7 @@ async function restoreComposeStates() {
     if (!p.hasCompose) continue;
     const repoPath = `/data/${p.id}/git`;
     try {
-      const { stdout } = await execFileAsync('podman', ['compose', 'ps', '-q'], { cwd: repoPath });
+      const { stdout } = await execFileAsync('podman', ['compose', '-p', p.id, 'ps', '-q'], { cwd: repoPath });
       if (stdout.trim()) {
         setProjectStatus(p.id, 'running');
         startLogCapture(p.id, repoPath);
