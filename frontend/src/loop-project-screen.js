@@ -1,7 +1,7 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
 import './loop-top-bar.js';
 import {
-  iconArrowLeft, iconPlay, iconStop, iconChevronDown, iconRefresh,
+  iconArrowLeft, iconPlay, iconStop, iconRefresh,
   iconExternal, iconTerminal, iconSparkle, iconCopy, iconCheck,
   iconBranch, iconChevron, iconPencil, iconSend
 } from './icons.js';
@@ -79,7 +79,6 @@ class LoopProjectScreen extends LitElement {
     _openImages: { state: true },
     _dialog: { state: true },
     _ports: { state: true },
-    _runMenuOpen: { state: true },
     _logEmpty: { state: true },
     _dragOverFiles: { state: true },
     _dropTargetDir: { state: true },
@@ -165,49 +164,6 @@ class LoopProjectScreen extends LitElement {
       background: currentColor;
       animation: pulseDot 2s ease-in-out infinite;
     }
-    .chevron-btn {
-      width: 34px;
-      height: 34px;
-      border-radius: var(--radius);
-      border: 1px solid var(--line-soft);
-      background: var(--bg-2);
-      color: var(--fg-2);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.12s;
-    }
-    .chevron-btn:hover { background: var(--bg-3); }
-    .chevron-wrap {
-      position: relative;
-    }
-    .run-menu {
-      position: absolute;
-      top: calc(100% + 4px);
-      right: 0;
-      background: var(--bg-2);
-      border: 1px solid var(--line-soft);
-      border-radius: var(--radius);
-      padding: 4px;
-      min-width: 120px;
-      z-index: 100;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-    }
-    .run-menu-item {
-      width: 100%;
-      text-align: left;
-      padding: 6px 10px;
-      border: none;
-      background: transparent;
-      color: var(--fg-1);
-      font-size: 13px;
-      font-family: var(--font-sans);
-      border-radius: var(--radius-sm);
-      cursor: pointer;
-      transition: background 0.1s;
-    }
-    .run-menu-item:hover { background: var(--bg-3); }
     .server-bar {
       display: flex;
       align-items: center;
@@ -1232,7 +1188,6 @@ class LoopProjectScreen extends LitElement {
     this._openDiffs = [];   // [{ tabId, path, staged }]
     this._openImages = [];  // string[] paths
     this._ports = [];
-    this._runMenuOpen = false;
     this._dialog = null;    // null | { type, ...data }
     this._logLines = [];
     this._logAutoScroll = true;
@@ -2290,22 +2245,7 @@ class LoopProjectScreen extends LitElement {
     } catch { /* ignore */ }
   }
 
-  _toggleRunMenu(e) {
-    e.stopPropagation();
-    if (this._runMenuOpen) {
-      this._runMenuOpen = false;
-      return;
-    }
-    this._runMenuOpen = true;
-    const close = () => {
-      this._runMenuOpen = false;
-      document.removeEventListener('click', close);
-    };
-    document.addEventListener('click', close);
-  }
-
   async _restartRun() {
-    this._runMenuOpen = false;
     if (!this.project) return;
     this._ports = [];
     try {
@@ -2481,14 +2421,9 @@ class LoopProjectScreen extends LitElement {
                   : html`${iconPlay} Run`
                 }
               </button>
-              <div class="chevron-wrap">
-                <button class="chevron-btn" @click=${this._toggleRunMenu}>${iconChevronDown}</button>
-                ${this._runMenuOpen ? html`
-                  <div class="run-menu">
-                    <button class="run-menu-item" @click=${this._restartRun}>Restart</button>
-                  </div>
-                ` : ''}
-              </div>
+              ${this._running ? html`
+                <button class="run-btn idle" @click=${this._restartRun}>Restart</button>
+              ` : ''}
             </div>
             ${this._running ? html`
               ${this._ports.length ? html`
