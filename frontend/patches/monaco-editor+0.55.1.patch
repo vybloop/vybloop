@@ -1,0 +1,54 @@
+diff --git a/node_modules/monaco-editor/esm/vs/base/browser/touch.js b/node_modules/monaco-editor/esm/vs/base/browser/touch.js
+index ca78b0b..e129551 100644
+--- a/node_modules/monaco-editor/esm/vs/base/browser/touch.js
++++ b/node_modules/monaco-editor/esm/vs/base/browser/touch.js
+@@ -15,6 +15,28 @@ var __decorate = (undefined && undefined.__decorate) || function (decorators, ta
+     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+     return c > 3 && r && Object.defineProperty(target, key, r), r;
+ };
++// Shadow-DOM fix: when touch events are listened to on `document`, the per-Touch
++// `target` is retargeted to the shadow host, so Monaco's `target.contains(initialTarget)`
++// check in dispatchEvent never matches. Recompute the real target per touch by
++// piercing shadow roots via elementFromPoint at the touch coordinates.
++function deepElementFromPoint(x, y) {
++    let el = document.elementFromPoint(x, y);
++    while (el && el.shadowRoot) {
++        const next = el.shadowRoot.elementFromPoint(x, y);
++        if (!next || next === el) break;
++        el = next;
++    }
++    return el;
++}
++function resolveTouchTarget(touch) {
++    const original = touch.target;
++    // Only retarget when the document-level target is actually a shadow host —
++    // i.e. retargeting happened. Avoids cost / surprises in the common case.
++    if (!original || !(original instanceof Element) || !original.shadowRoot) {
++        return original;
++    }
++    return deepElementFromPoint(touch.clientX, touch.clientY) || original;
++}
+ var EventType;
+ (function (EventType) {
+     EventType.Tap = '-monaco-gesturetap';
+@@ -81,9 +103,10 @@ class Gesture extends Disposable {
+         }
+         for (let i = 0, len = e.targetTouches.length; i < len; i++) {
+             const touch = e.targetTouches.item(i);
++            const resolvedTarget = resolveTouchTarget(touch);
+             this.activeTouches[touch.identifier] = {
+                 id: touch.identifier,
+-                initialTarget: touch.target,
++                initialTarget: resolvedTarget,
+                 initialTimeStamp: timestamp,
+                 initialPageX: touch.pageX,
+                 initialPageY: touch.pageY,
+@@ -91,7 +114,7 @@ class Gesture extends Disposable {
+                 rollingPageX: [touch.pageX],
+                 rollingPageY: [touch.pageY]
+             };
+-            const evt = this.newGestureEvent(EventType.Start, touch.target);
++            const evt = this.newGestureEvent(EventType.Start, resolvedTarget);
+             evt.pageX = touch.pageX;
+             evt.pageY = touch.pageY;
+             this.dispatchEvent(evt);
