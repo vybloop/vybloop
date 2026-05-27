@@ -85,6 +85,7 @@ class LoopProjectScreen extends LitElement {
     _dropTargetDir: { state: true },
     _uploading: { state: true },
     _contextMenu: { state: true },
+    _changesContextMenu: { state: true },
     _dialogInput: { state: true },
   };
 
@@ -1242,6 +1243,7 @@ class LoopProjectScreen extends LitElement {
     this._dropTargetDir = null;
     this._uploading = false;
     this._contextMenu = null;  // null | { x, y, path, isDir }
+    this._changesContextMenu = null;  // null | { x, y, file }
     this._dialogInput = '';
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileMtimes = new Map();       // path -> server mtime
@@ -1555,6 +1557,32 @@ class LoopProjectScreen extends LitElement {
     };
     document.addEventListener('click', close);
     document.addEventListener('contextmenu', close);
+  }
+
+  _showChangesContextMenu(e, file) {
+    e.preventDefault();
+    e.stopPropagation();
+    this._changesContextMenu = { x: e.clientX, y: e.clientY, file };
+    const close = () => {
+      this._changesContextMenu = null;
+      document.removeEventListener('click', close);
+      document.removeEventListener('contextmenu', close);
+    };
+    document.addEventListener('click', close);
+    document.addEventListener('contextmenu', close);
+  }
+
+  async _revertFile(file) {
+    this._changesContextMenu = null;
+    if (!this.project) return;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/changes/${file.id}/revert`, { method: 'POST' });
+      if (res.ok) {
+        this._files = this._files.filter(f => f.id !== file.id);
+      }
+    } catch (e) {
+      console.error('Failed to revert file', e);
+    }
   }
 
   _openCreateFolderDialog(parentPath) {
@@ -2162,6 +2190,16 @@ class LoopProjectScreen extends LitElement {
     `;
   }
 
+  _renderChangesContextMenu() {
+    const m = this._changesContextMenu;
+    if (!m) return '';
+    return html`
+      <div class="ctx-menu" style="left:${m.x}px;top:${m.y}px" @click=${e => e.stopPropagation()}>
+        <button class="ctx-menu-item danger" @click=${() => this._revertFile(m.file)}>Revert changes</button>
+      </div>
+    `;
+  }
+
   async _saveIdentity() {
     if (!this._identityName.trim() || !this._identityEmail.trim()) return;
     this._savingIdentity = true;
@@ -2354,7 +2392,7 @@ class LoopProjectScreen extends LitElement {
     const tabId = this._diffTabId(file.path, file.staged);
     const isActive = this._activeTab === tabId;
     return html`
-      <div class="file-row ${isActive ? 'selected' : ''} ${isDir ? 'no-diff' : ''}" @click=${() => this._openDiff(file)}>
+      <div class="file-row ${isActive ? 'selected' : ''} ${isDir ? 'no-diff' : ''}" @click=${() => this._openDiff(file)} @contextmenu=${(e) => this._showChangesContextMenu(e, file)}>
         <div class="file-checkbox ${file.staged ? 'checked' : ''}"
           @click=${(e) => { e.stopPropagation(); this._toggleStage(file); }}>
           ${file.staged ? html`
@@ -2871,6 +2909,7 @@ class LoopProjectScreen extends LitElement {
       ` : ''}
 
       ${this._renderContextMenu()}
+      ${this._renderChangesContextMenu()}
 
       ${this._narrow && this._activeTab !== 'changes' && !this._isFilePath(this._activeTab) ? html`
         ${this._inputOpen ? html`

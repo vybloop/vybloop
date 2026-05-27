@@ -17,6 +17,7 @@ import {
   setProjectStatus,
   getHasCompose,
   toggleStage,
+  revertFile,
   stageAll,
   getRemoteStatus,
   syncProject,
@@ -212,6 +213,15 @@ app.post('/api/projects/:id/changes/:fileId/toggle', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'not found' });
   const result = await toggleStage(req.params.id, req.params.fileId);
   if (!result) return res.status(404).json({ error: 'file not found' });
+  res.json(result);
+});
+
+app.post('/api/projects/:id/changes/:fileId/revert', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const result = await revertFile(req.params.id, req.params.fileId);
+  if (!result) return res.status(404).json({ error: 'file not found' });
+  if (result.error) return res.status(400).json(result);
   res.json(result);
 });
 

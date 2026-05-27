@@ -539,6 +539,36 @@ export function deleteItem(id, itemPath) {
   }
 }
 
+export async function revertFile(id, fileId) {
+  const p = projects.find(p => p.id === id);
+  if (!p) return null;
+
+  const filePath = decodeFileId(fileId);
+  const cwd = gitDir(id);
+
+  const statusOut = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--', filePath]);
+  const entry = statusOut ? statusOut.split('\0')[0] : '';
+  if (!entry) return { ok: true };
+
+  const X = entry[0];
+  const Y = entry[1];
+  const isUntracked = X === '?' && Y === '?';
+  const isStaged = X !== ' ' && X !== '?';
+
+  if (isUntracked) {
+    const abs = resolve(cwd, normalize(filePath));
+    if (!abs.startsWith(cwd + '/') && abs !== cwd) return { error: 'invalid path' };
+    rmSync(abs, { recursive: true, force: true });
+  } else {
+    if (isStaged) {
+      await runGit(cwd, ['restore', '--staged', '--', filePath]);
+    }
+    await runGit(cwd, ['restore', '--', filePath]);
+  }
+
+  return { ok: true };
+}
+
 export async function toggleStage(id, fileId) {
   const p = projects.find(p => p.id === id);
   if (!p) return null;
