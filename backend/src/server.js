@@ -112,6 +112,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
 
   if (isRunning) {
     setProjectStatus(id, 'idle');
+    broadcastStatus(id, 'idle');
     res.json({ status: 'idle' });
     stopLogCapture(id);
     execFile('podman', ['compose', '-p', id, 'down'], { cwd: repoPath }, (err) => {
@@ -123,6 +124,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
     });
   } else {
     setProjectStatus(id, 'running');
+    broadcastStatus(id, 'running');
     res.json({ status: 'running' });
     execFile('podman', ['compose', '-p', id, 'up', '--build', '-d'], { cwd: repoPath }, async (err) => {
       if (err) {

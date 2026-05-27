@@ -34,6 +34,7 @@ class LoopApp extends LitElement {
     this._route = 'home';
     this._projectId = null;
     this._projects = [];
+    this._projectSse = null;
     this._onPopState = this._onPopState.bind(this);
   }
 
@@ -55,6 +56,19 @@ class LoopApp extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     window.removeEventListener('popstate', this._onPopState);
+    this._projectSse?.close();
+    this._projectSse = null;
+  }
+
+  _connectProjectSse(projectId) {
+    this._projectSse?.close();
+    this._projectSse = null;
+    if (!projectId) return;
+    this._projectSse = new EventSource(`/api/projects/${projectId}/events`);
+    this._projectSse.addEventListener('status', (e) => {
+      const { status } = JSON.parse(e.data);
+      this._projects = this._projects.map(p => p.id === projectId ? { ...p, status } : p);
+    });
   }
 
   _applyLocation(location, push) {
@@ -73,6 +87,13 @@ class LoopApp extends LitElement {
     }
     this._route = route;
     this._projectId = projectId;
+    if (route === 'project' && projectId) {
+      this._fetchProject(projectId);
+      this._connectProjectSse(projectId);
+    } else {
+      this._projectSse?.close();
+      this._projectSse = null;
+    }
   }
 
   _routeToPath(route, projectId) {
@@ -85,6 +106,25 @@ class LoopApp extends LitElement {
     window.history.pushState({ route, projectId }, '', this._routeToPath(route, projectId));
     this._route = route;
     this._projectId = projectId;
+    if (route === 'project' && projectId) {
+      this._fetchProject(projectId);
+      this._connectProjectSse(projectId);
+    } else {
+      this._projectSse?.close();
+      this._projectSse = null;
+    }
+  }
+
+  async _fetchProject(projectId) {
+    try {
+      const res = await fetch(`/api/projects/${projectId}`);
+      if (res.ok) {
+        const project = await res.json();
+        this._projects = this._projects.map(p => p.id === projectId ? project : p);
+      }
+    } catch (e) {
+      console.warn('Could not fetch project', e);
+    }
   }
 
   _onPopState(e) {
