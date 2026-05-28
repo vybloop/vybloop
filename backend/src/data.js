@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync, rmSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join, resolve, normalize, basename } from 'path';
+import { dirname, join, resolve, normalize, basename, relative } from 'path';
 import { spawn, execFile } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -425,6 +425,68 @@ export async function stageAll(id) {
   const cwd = gitDir(id);
   await runGit(cwd, ['add', '-A']);
   return getGitChanges(id);
+}
+
+const BINARY_EXTENSIONS = new Set([
+  'png','jpg','jpeg','gif','webp','svg','bmp','ico','avif',
+  'pdf','zip','tar','gz','bz2','7z','rar',
+  'mp3','mp4','wav','ogg','flac','avi','mov','mkv',
+  'woff','woff2','ttf','eot','otf',
+  'exe','dll','so','bin','pyc',
+  'lock',
+]);
+
+function isBinaryPath(filePath) {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+  return BINARY_EXTENSIONS.has(ext);
+}
+
+function collectFiles(dirPath, baseDir, depth = 0) {
+  if (depth >= 6) return [];
+  let entries;
+  try { entries = readdirSync(dirPath, { withFileTypes: true }); } catch { return []; }
+  const files = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name)) {
+        files.push(...collectFiles(join(dirPath, entry.name), baseDir, depth + 1));
+      }
+    } else {
+      const abs = join(dirPath, entry.name);
+      if (!isBinaryPath(entry.name)) files.push(abs);
+    }
+  }
+  return files;
+}
+
+export function searchFiles(id, query, caseSensitive = false, maxMatches = 100) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const files = collectFiles(base, base);
+  const results = [];
+  let total = 0;
+  const searchQuery = caseSensitive ? query : query.toLowerCase();
+
+  for (const absPath of files) {
+    if (total >= maxMatches) break;
+    let content;
+    try { content = readFileSync(absPath, 'utf8'); } catch { continue; }
+    const lines = content.split('\n');
+    const filePath = relative(base, absPath);
+    const matches = [];
+    for (let i = 0; i < lines.length && total < maxMatches; i++) {
+      const line = lines[i];
+      const haystack = caseSensitive ? line : line.toLowerCase();
+      let pos = haystack.indexOf(searchQuery);
+      if (pos !== -1) {
+        matches.push({ line: i + 1, text: line, matchStart: pos, matchEnd: pos + searchQuery.length });
+        total++;
+        // Only record first match per line (one entry per occurrence would bloat results)
+      }
+    }
+    if (matches.length > 0) results.push({ file: filePath, matches });
+  }
+  return { results, total };
 }
 
 export function setProjectStatus(id, status) {

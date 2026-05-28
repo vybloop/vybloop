@@ -86,6 +86,12 @@ class LoopProjectScreen extends LitElement {
     _contextMenu: { state: true },
     _changesContextMenu: { state: true },
     _dialogInput: { state: true },
+    _searchOpen: { state: true },
+    _searchQuery: { state: true },
+    _searchCaseSensitive: { state: true },
+    _searchResults: { state: true },
+    _searchLoading: { state: true },
+    _searchExpandedFiles: { state: true },
   };
 
   static styles = [css`
@@ -464,6 +470,118 @@ class LoopProjectScreen extends LitElement {
       font-family: var(--font-sans);
       font-style: italic;
       pointer-events: none;
+    }
+
+    /* Search panel */
+    .search-box-wrap {
+      padding: 8px 12px;
+      position: relative;
+    }
+    .search-input-row {
+      display: flex;
+      align-items: center;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .search-input-row:focus-within {
+      border-color: var(--accent);
+    }
+    .search-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      padding: 5px 8px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--fg-1);
+      min-width: 0;
+    }
+    .search-input::placeholder { color: var(--fg-3); }
+    .search-case-btn {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border: none;
+      background: transparent;
+      color: var(--fg-3);
+      cursor: pointer;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      border-left: 1px solid var(--line-soft);
+      transition: background 0.1s, color 0.1s;
+      user-select: none;
+      letter-spacing: -0.04em;
+    }
+    .search-case-btn:hover { background: var(--bg-3); color: var(--fg-1); }
+    .search-case-btn.active { color: var(--accent); background: var(--accent-soft); }
+    .search-results {
+      padding: 0 0 8px;
+    }
+    .search-status {
+      padding: 6px 12px;
+      font-size: 11px;
+      color: var(--fg-3);
+      font-family: var(--font-sans);
+    }
+    .search-file-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 12px;
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-1);
+      user-select: none;
+    }
+    .search-file-row:hover { background: var(--bg-2); }
+    .search-file-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .search-match-count {
+      font-size: 10px;
+      color: var(--fg-3);
+      flex-shrink: 0;
+    }
+    .search-match-row {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 2px 12px 2px 32px;
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-2);
+      overflow: hidden;
+    }
+    .search-match-row:hover { background: var(--bg-2); }
+    .search-match-line-num {
+      flex-shrink: 0;
+      color: var(--fg-3);
+      font-size: 10px;
+      min-width: 24px;
+      text-align: right;
+    }
+    .search-match-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .search-match-hl {
+      background: oklch(0.84 0.18 80 / 0.35);
+      color: var(--fg-1);
+      border-radius: 2px;
     }
 
     /* Commit box */
@@ -1200,6 +1318,12 @@ class LoopProjectScreen extends LitElement {
     this._contextMenu = null;  // null | { x, y, path, isDir }
     this._changesContextMenu = null;  // null | { x, y, file }
     this._dialogInput = '';
+    this._searchOpen = true;
+    this._searchQuery = '';
+    this._searchCaseSensitive = false;
+    this._searchResults = null;  // null | { results, total }
+    this._searchLoading = false;
+    this._searchExpandedFiles = new Set();
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileMtimes = new Map();       // path -> server mtime
     this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
@@ -1221,6 +1345,13 @@ class LoopProjectScreen extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this._mq.addEventListener('change', this._mqHandler);
+    this._searchKeyHandler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'f') {
+        e.preventDefault();
+        this._focusSearch();
+      }
+    };
+    window.addEventListener('keydown', this._searchKeyHandler);
   }
 
   firstUpdated() {
@@ -1272,7 +1403,7 @@ class LoopProjectScreen extends LitElement {
         this._ensureMonaco();
         if (this._monacoEditor) {
           this._monacoEditor.setModel(this._fileModels.get(this._activeTab) ?? null);
-          requestAnimationFrame(() => this._monacoEditor?.layout());
+          requestAnimationFrame(() => { this._monacoEditor?.layout(); this._applyPendingNav(); });
         }
         this._startPolling(true);
       } else if (this._isDiffTab(this._activeTab)) {
@@ -1296,6 +1427,7 @@ class LoopProjectScreen extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._mq?.removeEventListener('change', this._mqHandler);
+    if (this._searchKeyHandler) window.removeEventListener('keydown', this._searchKeyHandler);
     this._sse?.close();
     this._sse = null;
     this._logSse?.close();
@@ -2360,6 +2492,95 @@ class LoopProjectScreen extends LitElement {
     this._expandedDirs = next;
   }
 
+  async _runSearch() {
+    const q = this._searchQuery.trim();
+    if (!q) { this._searchResults = null; return; }
+    this._searchLoading = true;
+    try {
+      const params = new URLSearchParams({ q, caseSensitive: this._searchCaseSensitive });
+      const res = await fetch(`/api/projects/${this.project.id}/search?${params}`);
+      if (!res.ok) { this._searchResults = null; return; }
+      const data = await res.json();
+      this._searchResults = data;
+      // Auto-expand all result files
+      this._searchExpandedFiles = new Set(data.results.map(r => r.file));
+    } finally {
+      this._searchLoading = false;
+    }
+  }
+
+  _toggleSearchFile(filePath) {
+    const next = new Set(this._searchExpandedFiles);
+    if (next.has(filePath)) next.delete(filePath); else next.add(filePath);
+    this._searchExpandedFiles = next;
+  }
+
+  async _openFileAtLine(filePath, line) {
+    this._pendingNavLine = { path: filePath, line };
+    await this._openFile(filePath);
+    this._applyPendingNav();
+  }
+
+  _applyPendingNav() {
+    if (!this._pendingNavLine) return;
+    const { path, line } = this._pendingNavLine;
+    if (this._activeTab === path && this._monacoEditor && this._fileModels.has(path)) {
+      this._monacoEditor.revealLineInCenter(line);
+      this._monacoEditor.setPosition({ lineNumber: line, column: 1 });
+      this._monacoEditor.focus();
+      this._pendingNavLine = null;
+    }
+  }
+
+  _focusSearch() {
+    this._searchOpen = true;
+    requestAnimationFrame(() => {
+      const input = this.shadowRoot?.querySelector('.search-input');
+      if (input) { input.focus(); input.select(); }
+    });
+  }
+
+  _renderSearchResults() {
+    if (this._searchLoading) return html`<div class="search-status">Searching…</div>`;
+    if (!this._searchResults) return '';
+    const { results, total } = this._searchResults;
+    if (results.length === 0) return html`<div class="search-status">No results</div>`;
+    return html`
+      <div class="search-status">${total} match${total !== 1 ? 'es' : ''} in ${results.length} file${results.length !== 1 ? 's' : ''}${total >= 100 ? ' (limit reached)' : ''}</div>
+      <div class="search-results">
+        ${results.map(({ file, matches }) => {
+          const expanded = this._searchExpandedFiles.has(file);
+          const fname = file.split('/').pop();
+          const fdir = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '';
+          return html`
+            <div class="search-file-row" @click=${() => this._toggleSearchFile(file)}>
+              <svg class="tree-dir-chevron ${expanded ? 'open' : ''}" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 6 6 6-6 6"/>
+              </svg>
+              <svg class="tree-icon tree-dir-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+              <span class="search-file-name" title=${file}>${fname}${fdir ? html`<span style="color:var(--fg-3)"> ${fdir}</span>` : ''}</span>
+              <span class="search-match-count">${matches.length}</span>
+            </div>
+            ${expanded ? matches.map(m => {
+              const before = m.text.slice(0, m.matchStart);
+              const match = m.text.slice(m.matchStart, m.matchEnd);
+              const after = m.text.slice(m.matchEnd);
+              return html`
+                <div class="search-match-row" @click=${() => this._openFileAtLine(file, m.line)}>
+                  <span class="search-match-line-num">${m.line}</span>
+                  <span class="search-match-text">${before}<span class="search-match-hl">${match}</span>${after}</span>
+                </div>
+              `;
+            }) : ''}
+          `;
+        })}
+      </div>
+    `;
+  }
+
   _renderTreeNodes(nodes, depth = 0, parentPath = '') {
     const indent = depth * 14;
     return nodes.map(node => {
@@ -2600,6 +2821,38 @@ class LoopProjectScreen extends LitElement {
               ` : ''}
               ${this._uploading ? html`<div class="tree-empty">Uploading…</div>` : ''}
             </div>
+          ` : ''}
+        </div>
+
+        <div class="collapsible-section">
+          <div class="section-header" @click=${() => { this._searchOpen = !this._searchOpen; }}>
+            <div class="section-header-left">
+              <svg class="section-chevron ${this._searchOpen ? 'open' : ''}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 6 6 6-6 6"/>
+              </svg>
+              <div class="section-title">Search</div>
+            </div>
+          </div>
+
+          ${this._searchOpen ? html`
+            <div class="search-box-wrap">
+              <div class="search-input-row">
+                <input
+                  class="search-input"
+                  type="text"
+                  placeholder="Search files…"
+                  .value=${this._searchQuery}
+                  @input=${e => { this._searchQuery = e.target.value; }}
+                  @keydown=${e => { if (e.key === 'Enter') this._runSearch(); }}
+                />
+                <button
+                  class="search-case-btn ${this._searchCaseSensitive ? 'active' : ''}"
+                  title="Match case"
+                  @click=${() => { this._searchCaseSensitive = !this._searchCaseSensitive; }}
+                >Aa</button>
+              </div>
+            </div>
+            ${this._renderSearchResults()}
           ` : ''}
         </div>
       </div>

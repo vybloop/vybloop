@@ -32,6 +32,7 @@ import {
   createFolder,
   renameItem,
   deleteItem,
+  searchFiles,
   TEMPLATES,
 } from './data.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts } from './file-watcher.js';
@@ -235,6 +236,17 @@ app.get('/api/projects/:id/diff', async (req, res) => {
   const staged = req.query.staged === 'true';
   const result = await getFileDiff(req.params.id, filePath, staged);
   if (!result) return res.status(404).json({ error: 'not found' });
+  res.json(result);
+});
+
+app.get('/api/projects/:id/search', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const q = req.query.q;
+  if (!q || q.trim() === '') return res.json({ results: [], total: 0 });
+  const caseSensitive = req.query.caseSensitive === 'true';
+  const result = searchFiles(req.params.id, q, caseSensitive, 100);
+  if (!result) return res.status(404).json({ error: 'project not found' });
   res.json(result);
 });
 
