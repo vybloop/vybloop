@@ -41,6 +41,27 @@ import { startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manage
 
 const execFileAsync = promisify(execFile);
 
+async function composeDown(projectId, repoPath) {
+  // Primary path: compose down handles stop + container removal + pod removal.
+  // 3s SIGTERM timeout before SIGKILL keeps shutdown snappy.
+  const ok = await execFileAsync('podman', ['compose', '-p', projectId, 'down', '--timeout', '3'], {
+    cwd: repoPath, timeout: 30_000,
+  }).then(() => true).catch(() => false);
+
+  if (!ok) {
+    // Fallback: explicitly remove containers then the pod. This handles the case
+    // where compose down is blocked (e.g. a partially-removed pod from a prior crash).
+    const { stdout } = await execFileAsync('podman', ['compose', '-p', projectId, 'ps', '-q'], {
+      cwd: repoPath, timeout: 10_000,
+    }).catch(() => ({ stdout: '' }));
+    const ids = stdout.trim().split('\n').filter(Boolean);
+    if (ids.length > 0) {
+      await execFileAsync('podman', ['rm', '-f', ...ids], { timeout: 15_000 }).catch(() => {});
+    }
+    await execFileAsync('podman', ['pod', 'rm', '-f', `pod_${projectId}`], { timeout: 15_000 }).catch(() => {});
+  }
+}
+
 async function getContainerPorts(projectId, repoPath) {
   const { stdout: idsOut } = await execFileAsync('podman', ['compose', '-p', projectId, 'ps', '-q'], { cwd: repoPath });
   const ids = idsOut.trim().split('\n').filter(Boolean);
@@ -112,31 +133,35 @@ app.post('/api/projects/:id/run', async (req, res) => {
   const repoPath = `/data/${id}/git`;
   const isRunning = project.status === 'running';
 
+  if (project.status === 'stopping') {
+    return res.status(409).json({ error: 'stop already in progress' });
+  }
+
   if (isRunning) {
-    setProjectStatus(id, 'idle');
-    broadcastStatus(id, 'idle');
+    setProjectStatus(id, 'stopping');
+    broadcastStatus(id, 'stopping');
     notifyProjectStopped(id);
-    res.json({ status: 'idle' });
+    res.json({ status: 'stopping' });
     stopLogCapture(id);
-    execFile('podman', ['compose', '-p', id, 'down'], { cwd: repoPath }, (err) => {
-      if (err) {
-        console.error(`[compose] down failed for ${id}:`, err.message);
-        setProjectStatus(id, 'error');
-        broadcastStatus(id, 'error');
-      }
+    composeDown(id, repoPath).then(() => {
+      setProjectStatus(id, 'idle');
+      broadcastStatus(id, 'idle');
+    }).catch((err) => {
+      console.error(`[compose] down failed for ${id}:`, err.message);
+      setProjectStatus(id, 'error');
+      broadcastStatus(id, 'error');
     });
   } else {
     setProjectStatus(id, 'running');
     broadcastStatus(id, 'running');
     notifyProjectStarted(id);
     res.json({ status: 'running' });
-    execFile('podman', ['compose', '-p', id, 'up', '--build', '-d'], { cwd: repoPath }, async (err) => {
-      if (err) {
-        console.error(`[compose] up failed for ${id}:`, err.message);
-        setProjectStatus(id, 'error');
-        broadcastStatus(id, 'error');
-        notifyProjectStopped(id);
-      } else {
+    (async () => {
+      // Remove any leftover pod from a prior crashed shutdown — compose up will
+      // fail if the pod already exists, even with --force-recreate.
+      await execFileAsync('podman', ['pod', 'rm', '-f', `pod_${id}`], { timeout: 10_000 }).catch(() => {});
+      try {
+        await execFileAsync('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath });
         startLogCapture(id, repoPath);
         try {
           const ports = await getContainerPorts(id, repoPath);
@@ -144,8 +169,13 @@ app.post('/api/projects/:id/run', async (req, res) => {
         } catch (e) {
           console.error(`[compose] port detection failed for ${id}:`, e.message);
         }
+      } catch (err) {
+        console.error(`[compose] up failed for ${id}:`, err.message);
+        setProjectStatus(id, 'error');
+        broadcastStatus(id, 'error');
+        notifyProjectStopped(id);
       }
-    });
+    })();
   }
 });
 
@@ -159,30 +189,28 @@ app.post('/api/projects/:id/restart', async (req, res) => {
   notifyProjectStarted(id);
   res.json({ status: 'running' });
   stopLogCapture(id);
-  execFile('podman', ['compose', '-p', id, 'down'], { cwd: repoPath }, (downErr) => {
-    if (downErr) {
-      console.error(`[compose] restart/down failed for ${id}:`, downErr.message);
+
+  try {
+    await composeDown(id, repoPath);
+  } catch (downErr) {
+    console.error(`[compose] restart/down failed for ${id}:`, downErr.message);
+  }
+
+  execFile('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath }, async (upErr) => {
+    if (upErr) {
+      console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
       setProjectStatus(id, 'error');
       broadcastStatus(id, 'error');
       notifyProjectStopped(id);
-      return;
-    }
-    execFile('podman', ['compose', '-p', id, 'up', '--build', '-d'], { cwd: repoPath }, async (upErr) => {
-      if (upErr) {
-        console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
-        setProjectStatus(id, 'error');
-        broadcastStatus(id, 'error');
-        notifyProjectStopped(id);
-      } else {
-        startLogCapture(id, repoPath);
-        try {
-          const ports = await getContainerPorts(id, repoPath);
-          broadcastPorts(id, ports);
-        } catch (e) {
-          console.error(`[compose] port detection failed for ${id}:`, e.message);
-        }
+    } else {
+      startLogCapture(id, repoPath);
+      try {
+        const ports = await getContainerPorts(id, repoPath);
+        broadcastPorts(id, ports);
+      } catch (e) {
+        console.error(`[compose] port detection failed for ${id}:`, e.message);
       }
-    });
+    }
   });
 });
 
@@ -568,5 +596,5 @@ startIpcServer((msg) => {
 const PORT = process.env.PORT || 9876;
 server.listen(PORT, () => {
   console.log(`Loop server running on port ${PORT}`);
-  restoreComposeStates().catch(console.error);
+  //restoreComposeStates().catch(console.error);
 });

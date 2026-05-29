@@ -9,7 +9,7 @@ RUN npm run build
 FROM podman-base:latest
 USER root
 
-RUN apt-get update && apt-get install -y nodejs npm python3 python3-pip build-essential tmux \
+RUN apt-get update && apt-get install -y nodejs npm python3 python3-pip build-essential tmux catatonit \
     && pip3 install --break-system-packages podman-compose \
     && rm -rf /var/lib/apt/lists/*
 

@@ -3,9 +3,19 @@ set -e
 
 podman system migrate
 
-# Clean up stale container state left over from a previous run. Without this,
-# Podman emits lock-file errors when refreshing containers it knew about before restart.
-podman rm --all --force 2>/dev/null || true
+# Fix any lock ID mismatches from a previous unclean shutdown (zombie processes
+# that died holding SHM lock slots cause double-allocation on next run).
+podman system renumber 2>/dev/null || true
+
+# Clean up stale container state. If this fails (e.g. due to a lock mismatch that
+# renumber couldn't fix because a DB layer flag is still set), do a full system
+# reset as fallback — this clears all container/pod/network state while keeping
+# images intact.
+if ! podman rm --all --force 2>/dev/null; then
+  echo "[start] Stale container state could not be cleaned up, performing system reset..."
+  podman system reset --force 2>/dev/null || true
+fi
+podman pod rm --all --force 2>/dev/null || true
 
 if ! podman image exists claude-inner 2>/dev/null; then
   echo "[start] Building claude-inner image..."
@@ -13,4 +23,4 @@ if ! podman image exists claude-inner 2>/dev/null; then
   echo "[start] claude-inner image ready."
 fi
 
-exec node /app/src/server.js
+exec /usr/bin/catatonit -- node /app/src/server.js

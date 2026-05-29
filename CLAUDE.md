@@ -113,3 +113,26 @@ On server startup, `restoreComposeStates()` runs `podman compose ps -q` for each
 **Frontend** (`frontend/src/loop-project-screen.js`): The Run/Stop button is only rendered when `project.hasCompose` is true. The `status` SSE event (in addition to the fetch response) keeps `_running` in sync if compose fails after the optimistic update.
 
 **Compose provider**: `podman-compose` is installed in the app container (`Dockerfile`). Short image names (e.g. `golang:1.23-alpine`) resolve via `docker.io` thanks to `/etc/containers/registries.conf` set in the `podman-base` image (`podman/Dockerfile`).
+
+**Exec into a running compose container**: Podman runs rootless and requires `XDG_RUNTIME_DIR` to be set. The `docker compose exec` command won't work; use `podman exec` directly:
+
+```sh
+# List running containers to find the container name
+XDG_RUNTIME_DIR=/run/user/$(id -u) podman ps
+
+# Exec a shell into a specific container (e.g. miner-4_game_1)
+XDG_RUNTIME_DIR=/run/user/$(id -u) podman exec -it miner-4_game_1 sh
+
+# Or via podman-compose (use the service name from docker-compose.yml, e.g. "game")
+XDG_RUNTIME_DIR=/run/user/$(id -u) podman compose -p miner-4 exec game sh
+```
+
+**Recovering a stuck compose project**: If podman state gets corrupted (e.g. lock ID mismatch from an unclean shutdown), restart the outer container. `start.sh` runs `podman system renumber` and falls back to `podman system reset --force` automatically. If the volume itself is corrupt, wipe it:
+
+```sh
+docker compose down
+docker volume rm claudeproj_podman_storage
+docker compose up --build -d
+```
+
+This forces a rebuild of `claude-inner` and all project images on next use.

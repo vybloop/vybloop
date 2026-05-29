@@ -54,6 +54,7 @@ class LoopProjectScreen extends LitElement {
     project: { type: Object },
     _files: { state: true },
     _running: { state: true },
+    _stopping: { state: true },
     _commitMsg: { state: true },
     _activeTab: { state: true },
     _committing: { state: true },
@@ -1388,6 +1389,7 @@ class LoopProjectScreen extends LitElement {
   updated(changed) {
     if (changed.has('project') && this.project) {
       this._running = this.project.status === 'running';
+      this._stopping = this.project.status === 'stopping';
       this._loadChanges();
       this._loadFileTree();
       this._connectSse();
@@ -1811,9 +1813,10 @@ class LoopProjectScreen extends LitElement {
     this._sse.addEventListener('changes', (e) => { this._files = JSON.parse(e.data); });
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
     this._sse.addEventListener('status', (e) => {
-      const running = JSON.parse(e.data).status === 'running';
-      this._running = running;
-      if (!running) this._stale = false;
+      const { status } = JSON.parse(e.data);
+      this._running = status === 'running';
+      this._stopping = status === 'stopping';
+      if (status !== 'running') this._stale = false;
     });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
     this._sse.addEventListener('stale', (e) => { this._stale = JSON.parse(e.data).stale; });
@@ -2402,9 +2405,11 @@ class LoopProjectScreen extends LitElement {
       if (res.ok) {
         const { status } = await res.json();
         this._running = status === 'running';
+        this._stopping = status === 'stopping';
       }
     } catch (e) {
       this._running = !this._running;
+      this._stopping = false;
     }
   }
 
@@ -2675,13 +2680,15 @@ class LoopProjectScreen extends LitElement {
         <div class="sidebar-top">
           ${this.project?.hasCompose ? html`
             <div class="run-row">
-              <button class="run-btn ${this._running ? 'running' : 'idle'}" @click=${this._toggleRun}>
-                ${this._running
-                  ? html`<span class="run-btn-pulse"></span>Stop`
-                  : html`${iconPlay} Run`
+              <button class="run-btn ${this._running ? 'running' : 'idle'}" ?disabled=${this._stopping} @click=${this._toggleRun}>
+                ${this._stopping
+                  ? html`<span class="run-btn-pulse"></span>Stopping…`
+                  : this._running
+                    ? html`<span class="run-btn-pulse"></span>Stop`
+                    : html`${iconPlay} Run`
                 }
               </button>
-              ${this._running ? html`
+              ${this._running && !this._stopping ? html`
                 <button class="run-btn idle" @click=${this._restartRun}>Restart</button>
               ` : ''}
             </div>
