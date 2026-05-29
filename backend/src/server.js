@@ -35,7 +35,7 @@ import {
   searchFiles,
   TEMPLATES,
 } from './data.js';
-import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone } from './file-watcher.js';
+import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
 import { startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
 
@@ -115,6 +115,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
   if (isRunning) {
     setProjectStatus(id, 'idle');
     broadcastStatus(id, 'idle');
+    notifyProjectStopped(id);
     res.json({ status: 'idle' });
     stopLogCapture(id);
     execFile('podman', ['compose', '-p', id, 'down'], { cwd: repoPath }, (err) => {
@@ -127,12 +128,14 @@ app.post('/api/projects/:id/run', async (req, res) => {
   } else {
     setProjectStatus(id, 'running');
     broadcastStatus(id, 'running');
+    notifyProjectStarted(id);
     res.json({ status: 'running' });
     execFile('podman', ['compose', '-p', id, 'up', '--build', '-d'], { cwd: repoPath }, async (err) => {
       if (err) {
         console.error(`[compose] up failed for ${id}:`, err.message);
         setProjectStatus(id, 'error');
         broadcastStatus(id, 'error');
+        notifyProjectStopped(id);
       } else {
         startLogCapture(id, repoPath);
         try {
@@ -153,6 +156,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
 
   const id = req.params.id;
   const repoPath = `/data/${id}/git`;
+  notifyProjectStarted(id);
   res.json({ status: 'running' });
   stopLogCapture(id);
   execFile('podman', ['compose', '-p', id, 'down'], { cwd: repoPath }, (downErr) => {
@@ -160,6 +164,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
       console.error(`[compose] restart/down failed for ${id}:`, downErr.message);
       setProjectStatus(id, 'error');
       broadcastStatus(id, 'error');
+      notifyProjectStopped(id);
       return;
     }
     execFile('podman', ['compose', '-p', id, 'up', '--build', '-d'], { cwd: repoPath }, async (upErr) => {
@@ -167,6 +172,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
         console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
         setProjectStatus(id, 'error');
         broadcastStatus(id, 'error');
+        notifyProjectStopped(id);
       } else {
         startLogCapture(id, repoPath);
         try {
@@ -424,6 +430,7 @@ app.get('/api/projects/:id/events', async (req, res) => {
   ]);
   if (changes !== null) res.write(`event: changes\ndata: ${JSON.stringify(changes)}\n\n`);
   res.write(`event: files\ndata: ${JSON.stringify(tree ?? [])}\n\n`);
+  if (isProjectStale(req.params.id)) res.write(`event: stale\ndata: ${JSON.stringify({ stale: true })}\n\n`);
 
   getOrCreateWatcher(req.params.id).addClient(res);
 });
@@ -542,6 +549,7 @@ async function restoreComposeStates() {
       const { stdout } = await execFileAsync('podman', ['compose', '-p', p.id, 'ps', '-q'], { cwd: repoPath });
       if (stdout.trim()) {
         setProjectStatus(p.id, 'running');
+        notifyProjectStarted(p.id);
         startLogCapture(p.id, repoPath);
         console.log(`[compose] restored running state for ${p.id}`);
       }

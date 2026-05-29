@@ -2,6 +2,8 @@ import chokidar from 'chokidar';
 import { getChanges, getFileTree } from './data.js';
 
 const watchers = new Map();
+const runStartTimes = new Map(); // projectId -> start timestamp (ms)
+const staleProjects = new Set(); // projects with file changes since run started
 
 class ProjectWatcher {
   constructor(projectId) {
@@ -39,9 +41,17 @@ class ProjectWatcher {
       getChanges(this.projectId),
       Promise.resolve(getFileTree(this.projectId)),
     ]);
+
+    const wasStale = staleProjects.has(this.projectId);
+    if (runStartTimes.has(this.projectId) && !wasStale) {
+      staleProjects.add(this.projectId);
+    }
+    const nowStale = !wasStale && staleProjects.has(this.projectId);
+
     for (const res of this.clients) {
       if (changes !== null) sendEvent(res, 'changes', changes);
       sendEvent(res, 'files', tree ?? []);
+      if (nowStale) sendEvent(res, 'stale', { stale: true });
     }
   }
 
@@ -93,4 +103,24 @@ export function broadcastAgentDone(projectId) {
   for (const res of watcher.clients) {
     sendEvent(res, 'agent-done', {});
   }
+}
+
+export function notifyProjectStarted(projectId) {
+  runStartTimes.set(projectId, Date.now());
+  staleProjects.delete(projectId);
+  // Broadcast cleared stale state to any connected clients
+  const watcher = watchers.get(projectId);
+  if (!watcher) return;
+  for (const res of watcher.clients) {
+    sendEvent(res, 'stale', { stale: false });
+  }
+}
+
+export function notifyProjectStopped(projectId) {
+  runStartTimes.delete(projectId);
+  staleProjects.delete(projectId);
+}
+
+export function isProjectStale(projectId) {
+  return staleProjects.has(projectId);
 }

@@ -92,6 +92,7 @@ class LoopProjectScreen extends LitElement {
     _searchResults: { state: true },
     _searchLoading: { state: true },
     _searchExpandedFiles: { state: true },
+    _stale: { state: true },
   };
 
   static styles = [css`
@@ -211,6 +212,21 @@ class LoopProjectScreen extends LitElement {
     }
     .server-bar-starting {
       cursor: default;
+    }
+    .stale-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      background: oklch(0.78 0.14 80 / 0.12);
+      border: 1px solid oklch(0.78 0.14 80 / 0.3);
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      color: var(--warn);
+      line-height: 1.3;
+    }
+    .stale-badge svg {
+      flex-shrink: 0;
     }
     .server-link {
       font-family: var(--font-mono);
@@ -1324,6 +1340,7 @@ class LoopProjectScreen extends LitElement {
     this._searchResults = null;  // null | { results, total }
     this._searchLoading = false;
     this._searchExpandedFiles = new Set();
+    this._stale = false;
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileMtimes = new Map();       // path -> server mtime
     this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
@@ -1793,8 +1810,13 @@ class LoopProjectScreen extends LitElement {
     this._sse = new EventSource(`/api/projects/${this.project.id}/events`);
     this._sse.addEventListener('changes', (e) => { this._files = JSON.parse(e.data); });
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
-    this._sse.addEventListener('status', (e) => { this._running = JSON.parse(e.data).status === 'running'; });
+    this._sse.addEventListener('status', (e) => {
+      const running = JSON.parse(e.data).status === 'running';
+      this._running = running;
+      if (!running) this._stale = false;
+    });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
+    this._sse.addEventListener('stale', (e) => { this._stale = JSON.parse(e.data).stale; });
     this._sse.addEventListener('agent-done', () => {
       if (document.visibilityState !== 'visible') {
         document.title = 'Done! — Loop';
@@ -2686,6 +2708,16 @@ class LoopProjectScreen extends LitElement {
                   </div>
                 </div>
               `}
+              ${this._stale ? html`
+                <div class="stale-badge">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                  Files changed — restart to apply
+                </div>
+              ` : ''}
             ` : ''}
           ` : ''}
         </div>
