@@ -86,3 +86,11 @@ export function broadcastPorts(projectId, ports) {
     sendEvent(res, 'ports', ports);
   }
 }
+
+export function broadcastAgentDone(projectId) {
+  const watcher = watchers.get(projectId);
+  if (!watcher) return;
+  for (const res of watcher.clients) {
+    sendEvent(res, 'agent-done', {});
+  }
+}

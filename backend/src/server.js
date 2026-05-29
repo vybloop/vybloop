@@ -35,7 +35,8 @@ import {
   searchFiles,
   TEMPLATES,
 } from './data.js';
-import { getOrCreateWatcher, broadcastStatus, broadcastPorts } from './file-watcher.js';
+import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone } from './file-watcher.js';
+import { startIpcServer } from './ipc-server.js';
 import { startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
 
 const execFileAsync = promisify(execFile);
@@ -446,7 +447,7 @@ function tmuxName(projectId, type) {
 }
 
 const SESSION_COMMANDS = {
-  agent: (repoPath) => [
+  agent: (repoPath, projectId) => [
     'podman', 'run', '--rm', '-it',
     '-v', `${repoPath}:/project`,
     '-v', '/claudeconfig:/claudeconfig',
@@ -454,6 +455,7 @@ const SESSION_COMMANDS = {
     '--env', 'ANTHROPIC_API_KEY',
     '--env', 'IS_SANDBOX=1',
     '--env', 'COLORTERM=truecolor',
+    '--env', `LOOP_PROJECT_ID=${projectId}`,
     '-w', '/project',
     'claude-inner',
     'claude', '--dangerously-skip-permissions',
@@ -478,7 +480,7 @@ async function getOrCreateSession(projectId, type, repoPath) {
 
   const { terminalMode } = getConfig();
   const cwd = process.env.HOME || '/home/poduser';
-  const command = makeCommand(repoPath);
+  const command = makeCommand(repoPath, projectId);
 
   const session = terminalMode === 'direct'
     ? new DirectSession({ command, cwd })
@@ -548,6 +550,12 @@ async function restoreComposeStates() {
     }
   }
 }
+
+startIpcServer((msg) => {
+  if (msg.event === 'agent-done' && msg.projectId) {
+    broadcastAgentDone(msg.projectId);
+  }
+});
 
 const PORT = process.env.PORT || 9876;
 server.listen(PORT, () => {

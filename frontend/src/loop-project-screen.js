@@ -1345,6 +1345,10 @@ class LoopProjectScreen extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this._mq.addEventListener('change', this._mqHandler);
+    this._visibilityHandler = () => {
+      if (document.visibilityState === 'visible') document.title = 'Loop';
+    };
+    document.addEventListener('visibilitychange', this._visibilityHandler);
     this._searchKeyHandler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'f') {
         e.preventDefault();
@@ -1433,6 +1437,8 @@ class LoopProjectScreen extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._mq?.removeEventListener('change', this._mqHandler);
+    if (this._visibilityHandler) document.removeEventListener('visibilitychange', this._visibilityHandler);
+    document.title = 'Loop';
     if (this._searchKeyHandler) window.removeEventListener('keydown', this._searchKeyHandler);
     this._sse?.close();
     this._sse = null;
@@ -1789,6 +1795,11 @@ class LoopProjectScreen extends LitElement {
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
     this._sse.addEventListener('status', (e) => { this._running = JSON.parse(e.data).status === 'running'; });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
+    this._sse.addEventListener('agent-done', () => {
+      if (document.visibilityState !== 'visible') {
+        document.title = 'Done! — Loop';
+      }
+    });
   }
 
   _connectLogs() {

@@ -77,6 +77,7 @@ podman run --rm -it \
   --env ANTHROPIC_API_KEY \
   --env IS_SANDBOX=1 \
   --env COLORTERM=truecolor \
+  --env LOOP_PROJECT_ID=<projectId> \
   -w /project \
   claude-inner claude --dangerously-skip-permissions
 ```
@@ -84,6 +85,18 @@ podman run --rm -it \
 The `shell` session type runs `bash` in the same container (without the claudeconfig mount).
 
 Sessions are keyed by `projectId:type` and reused across reconnects while alive.
+
+### Inner-to-outer IPC — `backend/src/ipc-server.js`
+
+A Unix domain socket at `/claudeconfig/loop-events.sock` lets inner containers notify the backend. `/claudeconfig` is mounted into both the outer container and every `claude-inner` agent container, making it the natural shared path.
+
+**Backend** (`backend/src/ipc-server.js`): On startup, creates the socket and installs a Claude Code `Stop` hook by writing a notify script to `/claudeconfig/loop-notify-done.sh` and merging a `hooks.Stop` entry into `/claudeconfig/settings.json`. The socket accepts newline-delimited JSON messages `{ event, projectId }` and calls a handler in `server.js`.
+
+**Hook script**: Connects to the socket via Node.js and sends `{ event: "agent-done", projectId: "$LOOP_PROJECT_ID" }`. `LOOP_PROJECT_ID` is injected as an env var when the agent container is started.
+
+**Adding new events**: Send a new `event` value from the hook (or any process with access to `/claudeconfig/`), handle it in the `startIpcServer` callback in `server.js`, and broadcast via the SSE helpers in `file-watcher.js`.
+
+**SSE propagation**: `broadcastAgentDone(projectId)` in `file-watcher.js` sends an `agent-done` SSE event to all connected frontend clients for that project. The frontend listens in `_connectSse()` in `loop-project-screen.js`.
 
 ### Project run/stop (compose)
 
