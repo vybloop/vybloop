@@ -1350,6 +1350,12 @@ class LoopProjectScreen extends LitElement {
         e.preventDefault();
         this._focusSearch();
       }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 's') {
+        if (this._isFilePath(this._activeTab)) {
+          e.preventDefault();
+          this._saveFile(this._activeTab);
+        }
+      }
     };
     window.addEventListener('keydown', this._searchKeyHandler);
   }
@@ -1403,7 +1409,7 @@ class LoopProjectScreen extends LitElement {
         this._ensureMonaco();
         if (this._monacoEditor) {
           this._monacoEditor.setModel(this._fileModels.get(this._activeTab) ?? null);
-          requestAnimationFrame(() => { this._monacoEditor?.layout(); this._applyPendingNav(); });
+          requestAnimationFrame(() => { this._monacoEditor?.layout(); this._applyPendingNav(); this._monacoEditor?.focus(); });
         }
         this._startPolling(true);
       } else if (this._isDiffTab(this._activeTab)) {
