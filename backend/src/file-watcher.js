@@ -16,7 +16,7 @@ class ProjectWatcher {
   _start() {
     const repoPath = `/data/${this.projectId}/git`;
     this._chokidar = chokidar.watch(repoPath, {
-      ignored: [/\.git\/objects/, /\.git\/refs\//],
+      ignored: /(^|[\/\\])\.git([\/\\]|$)/,
       ignoreInitial: true,
       persistent: true,
     });
