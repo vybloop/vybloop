@@ -51,14 +51,21 @@ function _send(res, event, data) {
 const buffers = new Map(); // projectId -> LogBuffer
 const procs = new Map();   // projectId -> ChildProcess
 
+export function startBuildCapture(projectId) {
+  const existing = procs.get(projectId);
+  if (existing) { existing.kill(); procs.delete(projectId); }
+  const buf = new LogBuffer();
+  buffers.set(projectId, buf);
+  return buf;
+}
+
 export function startLogCapture(projectId, repoPath) {
   // Kill any existing capture process
   const existing = procs.get(projectId);
   if (existing) { existing.kill(); procs.delete(projectId); }
 
-  // Fresh buffer for each new run
-  const buf = new LogBuffer();
-  buffers.set(projectId, buf);
+  // Append to existing buffer (build output may already be there)
+  const buf = getOrCreateBuffer(projectId);
 
   const proc = spawn('podman', ['compose', '-p', projectId, 'logs', '-f'], { cwd: repoPath });
   procs.set(projectId, proc);

@@ -4,7 +4,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { TerminalSession, DirectSession } from './terminal-session.js';
 import {
@@ -37,7 +37,7 @@ import {
 } from './data.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
-import { startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
+import { startBuildCapture, startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -156,12 +156,31 @@ app.post('/api/projects/:id/run', async (req, res) => {
     broadcastStatus(id, 'running');
     notifyProjectStarted(id);
     res.json({ status: 'running' });
+    const buf = startBuildCapture(id);
     (async () => {
       // Remove any leftover pod from a prior crashed shutdown — compose up will
       // fail if the pod already exists, even with --force-recreate.
       await execFileAsync('podman', ['pod', 'rm', '-f', `pod_${id}`], { timeout: 10_000 }).catch(() => {});
       try {
-        await execFileAsync('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath });
+        await new Promise((resolve, reject) => {
+          const buildProc = spawn('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath });
+          let pending = '';
+          const onData = (chunk) => {
+            pending += chunk.toString();
+            let nl;
+            while ((nl = pending.indexOf('\n')) !== -1) {
+              buf.add(pending.slice(0, nl));
+              pending = pending.slice(nl + 1);
+            }
+          };
+          buildProc.stdout.on('data', onData);
+          buildProc.stderr.on('data', onData);
+          buildProc.on('exit', (code) => {
+            if (pending.trim()) buf.add(pending);
+            if (code === 0) resolve(); else reject(new Error(`build exited with code ${code}`));
+          });
+          buildProc.on('error', reject);
+        });
         startLogCapture(id, repoPath);
         try {
           const ports = await getContainerPorts(id, repoPath);
@@ -172,7 +191,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
       } catch (err) {
         console.error(`[compose] up failed for ${id}:`, err.message);
         setProjectStatus(id, 'error');
-        broadcastStatus(id, 'error');
+        broadcastStatus(id, 'error', 'Build failed — check the Logs tab');
         notifyProjectStopped(id);
       }
     })();
@@ -189,6 +208,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
   notifyProjectStarted(id);
   res.json({ status: 'running' });
   stopLogCapture(id);
+  const buf = startBuildCapture(id);
 
   try {
     await composeDown(id, repoPath);
@@ -196,13 +216,27 @@ app.post('/api/projects/:id/restart', async (req, res) => {
     console.error(`[compose] restart/down failed for ${id}:`, downErr.message);
   }
 
-  execFile('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath }, async (upErr) => {
-    if (upErr) {
-      console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
-      setProjectStatus(id, 'error');
-      broadcastStatus(id, 'error');
-      notifyProjectStopped(id);
-    } else {
+  (async () => {
+    try {
+      await new Promise((resolve, reject) => {
+        const buildProc = spawn('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath });
+        let pending = '';
+        const onData = (chunk) => {
+          pending += chunk.toString();
+          let nl;
+          while ((nl = pending.indexOf('\n')) !== -1) {
+            buf.add(pending.slice(0, nl));
+            pending = pending.slice(nl + 1);
+          }
+        };
+        buildProc.stdout.on('data', onData);
+        buildProc.stderr.on('data', onData);
+        buildProc.on('exit', (code) => {
+          if (pending.trim()) buf.add(pending);
+          if (code === 0) resolve(); else reject(new Error(`build exited with code ${code}`));
+        });
+        buildProc.on('error', reject);
+      });
       startLogCapture(id, repoPath);
       try {
         const ports = await getContainerPorts(id, repoPath);
@@ -210,8 +244,13 @@ app.post('/api/projects/:id/restart', async (req, res) => {
       } catch (e) {
         console.error(`[compose] port detection failed for ${id}:`, e.message);
       }
+    } catch (upErr) {
+      console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
+      setProjectStatus(id, 'error');
+      broadcastStatus(id, 'error', 'Build failed — check the Logs tab');
+      notifyProjectStopped(id);
     }
-  });
+  })();
 });
 
 app.get('/api/projects/:id/ports', async (req, res) => {

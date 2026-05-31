@@ -81,11 +81,11 @@ export function getOrCreateWatcher(projectId) {
   return watchers.get(projectId);
 }
 
-export function broadcastStatus(projectId, status) {
+export function broadcastStatus(projectId, status, detail = null) {
   const watcher = watchers.get(projectId);
   if (!watcher) return;
   for (const res of watcher.clients) {
-    sendEvent(res, 'status', { status });
+    sendEvent(res, 'status', detail ? { status, detail } : { status });
   }
 }
 

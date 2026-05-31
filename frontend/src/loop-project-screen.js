@@ -94,6 +94,7 @@ class LoopProjectScreen extends LitElement {
     _searchLoading: { state: true },
     _searchExpandedFiles: { state: true },
     _stale: { state: true },
+    _buildError: { state: true },
   };
 
   static styles = [css`
@@ -228,6 +229,22 @@ class LoopProjectScreen extends LitElement {
     }
     .stale-badge svg {
       flex-shrink: 0;
+    }
+    .build-error {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      background: oklch(0.72 0.18 25 / 0.1);
+      border: 1px solid oklch(0.72 0.18 25 / 0.3);
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      color: var(--del);
+      line-height: 1.4;
+      cursor: pointer;
+    }
+    .build-error:hover {
+      background: oklch(0.72 0.18 25 / 0.18);
     }
     .server-link {
       font-family: var(--font-mono);
@@ -1342,6 +1359,7 @@ class LoopProjectScreen extends LitElement {
     this._searchLoading = false;
     this._searchExpandedFiles = new Set();
     this._stale = false;
+    this._buildError = '';
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileMtimes = new Map();       // path -> server mtime
     this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
@@ -1813,10 +1831,11 @@ class LoopProjectScreen extends LitElement {
     this._sse.addEventListener('changes', (e) => { this._files = JSON.parse(e.data); });
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
     this._sse.addEventListener('status', (e) => {
-      const { status } = JSON.parse(e.data);
+      const { status, detail } = JSON.parse(e.data);
       this._running = status === 'running';
       this._stopping = status === 'stopping';
       if (status !== 'running') this._stale = false;
+      this._buildError = (status === 'error' && detail) ? detail : '';
     });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
     this._sse.addEventListener('stale', (e) => { this._stale = JSON.parse(e.data).stale; });
@@ -2400,6 +2419,7 @@ class LoopProjectScreen extends LitElement {
 
   async _toggleRun() {
     if (!this.project) return;
+    this._buildError = '';
     try {
       const res = await fetch(`/api/projects/${this.project.id}/run`, { method: 'POST' });
       if (res.ok) {
@@ -2692,6 +2712,14 @@ class LoopProjectScreen extends LitElement {
                 <button class="run-btn idle" @click=${this._restartRun}>Restart</button>
               ` : ''}
             </div>
+            ${this._buildError ? html`
+              <div class="build-error" @click=${() => this._activeTab = 'logs'}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                ${this._buildError}
+              </div>
+            ` : ''}
             ${this._running ? html`
               ${this._ports.length ? html`
                 <a class="server-bar"
