@@ -17,9 +17,12 @@ if ! podman rm --all --force 2>/dev/null; then
 fi
 podman pod rm --all --force 2>/dev/null || true
 
-if ! podman image exists claude-inner 2>/dev/null; then
-  echo "[start] Building claude-inner image..."
-  podman build -t claude-inner /app/inner-container/
+DOCKERFILE_HASH=$(sha256sum /app/inner-container/Dockerfile | cut -d' ' -f1)
+EXISTING_HASH=$(podman image inspect claude-inner --format '{{index .Labels "dockerfile-hash"}}' 2>/dev/null || true)
+
+if [ "$EXISTING_HASH" != "$DOCKERFILE_HASH" ]; then
+  echo "[start] Building claude-inner image (Dockerfile changed)..."
+  podman build -t claude-inner --label "dockerfile-hash=${DOCKERFILE_HASH}" /app/inner-container/
   echo "[start] claude-inner image ready."
 fi
 
