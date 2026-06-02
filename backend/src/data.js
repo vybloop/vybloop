@@ -407,7 +407,10 @@ export async function commitChanges(id, { message }) {
   if (!project) return null;
   const cwd = gitDir(id);
 
-  const result = await runGitResult(cwd, ['commit', '-m', message]);
+  const identityArgs = [];
+  if (config.gitName) identityArgs.push('-c', `user.name=${config.gitName}`);
+  if (config.gitEmail) identityArgs.push('-c', `user.email=${config.gitEmail}`);
+  const result = await runGitResult(cwd, [...identityArgs, 'commit', '-m', message]);
   if (!result.ok) {
     const err = result.stderr.trim() || result.stdout.trim() || 'commit failed';
     console.log(`[git] commit failed: ${err}`);
@@ -505,10 +508,16 @@ export function getHasCompose(id) {
 function applyGitAuthor(name, email) {
   const ops = [];
   if (name) ops.push(new Promise(resolve =>
-    execFile('git', ['config', '--global', 'user.name', name], resolve)
+    execFile('git', ['config', '--global', 'user.name', name], (err) => {
+      if (err) console.log(`[git] failed to set user.name globally: ${err.message}`);
+      resolve();
+    })
   ));
   if (email) ops.push(new Promise(resolve =>
-    execFile('git', ['config', '--global', 'user.email', email], resolve)
+    execFile('git', ['config', '--global', 'user.email', email], (err) => {
+      if (err) console.log(`[git] failed to set user.email globally: ${err.message}`);
+      resolve();
+    })
   ));
   if (ops.length) {
     console.log(`[git] applying global identity: "${name}" <${email}>`);
