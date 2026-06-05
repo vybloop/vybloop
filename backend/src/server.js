@@ -533,6 +533,12 @@ const SESSION_COMMANDS = {
     '-w', '/project',
     'claude-inner',
     'claude', '--dangerously-skip-permissions',
+    '--append-system-prompt', [
+      'You are running inside a Linux sandbox container.',
+      'You may freely install any Linux tools or packages you need (e.g. via apt-get, pip, npm, cargo, etc.).',
+      'You cannot run Docker or Podman containers directly inside this sandbox.',
+      'If the project has a docker-compose.yml at the repo root, instruct the user to start or restart the app using the "Run" or "Restart" button in the Loop UI — do not attempt to run compose yourself.',
+    ].join(' '),
   ],
   shell: (repoPath) => [
     'podman', 'run', '--rm', '-it',
