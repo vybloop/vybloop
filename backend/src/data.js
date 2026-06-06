@@ -19,8 +19,8 @@ export const TEMPLATES = [
   { id: 'expo', name: 'Expo (React Native)' },
 ];
 
-const DEFAULT_DB = { nextId: 1, projects: [], config: { terminalMode: 'direct', gitName: '', gitEmail: '' } };
-const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '' };
+const DEFAULT_DB = { nextId: 1, projects: [], config: { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' } };
+const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' };
 
 function load() {
   try {
@@ -319,7 +319,7 @@ export async function syncProject(id) {
 }
 
 function injectGithubToken(repoUrl) {
-  const token = process.env.GITHUB_TOKEN;
+  const token = process.env.GITHUB_TOKEN || config.githubPat;
   if (!token) return repoUrl;
   try {
     const u = new URL(repoUrl);
@@ -529,7 +529,8 @@ function applyGitAuthor(name, email) {
 if (config.gitName || config.gitEmail) applyGitAuthor(config.gitName, config.gitEmail);
 
 export function getConfig() {
-  return { ...config };
+  const { githubPat: _, ...rest } = config;
+  return rest;
 }
 
 export function updateConfig(updates) {
@@ -542,7 +543,19 @@ export function updateConfig(updates) {
   if (config.gitName !== prev.gitName || config.gitEmail !== prev.gitEmail) {
     applyGitAuthor(config.gitName, config.gitEmail);
   }
-  return { ...config };
+  return getConfig();
+}
+
+export function getGithubPatStatus() {
+  return {
+    configured: !!(process.env.GITHUB_TOKEN || config.githubPat),
+    fromEnv: !!process.env.GITHUB_TOKEN,
+  };
+}
+
+export function setGithubPat(pat) {
+  config.githubPat = pat || '';
+  persist();
 }
 
 export function uploadFiles(id, dir, files) {

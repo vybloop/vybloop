@@ -23,6 +23,8 @@ import {
   syncProject,
   getConfig,
   updateConfig,
+  getGithubPatStatus,
+  setGithubPat,
   getFileTree,
   getFileContent,
   getImageContent,
@@ -467,6 +469,17 @@ app.get('/api/config', (req, res) => {
 app.patch('/api/config', (req, res) => {
   const result = updateConfig(req.body);
   res.json(result);
+});
+
+app.get('/api/config/github-pat', (req, res) => {
+  res.json(getGithubPatStatus());
+});
+
+app.post('/api/config/github-pat', (req, res) => {
+  const { pat } = req.body;
+  if (typeof pat !== 'string') return res.status(400).json({ error: 'pat must be a string' });
+  setGithubPat(pat);
+  res.json(getGithubPatStatus());
 });
 
 app.get('/api/projects/:id/logs', async (req, res) => {

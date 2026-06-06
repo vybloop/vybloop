@@ -5,6 +5,7 @@ class LoopTopBar extends LitElement {
   static properties = {
     _configOpen: { state: true },
     _config: { state: true },
+    _patStatus: { state: true },
   };
 
   static styles = css`
@@ -137,6 +138,15 @@ class LoopTopBar extends LitElement {
     }
     .config-input:focus { border-color: var(--accent); }
     .config-input::placeholder { color: var(--fg-3); }
+    .config-input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .config-hint {
+      font-size: 11px;
+      color: var(--fg-3);
+      line-height: 1.4;
+    }
     .config-divider {
       border: none;
       border-top: 1px solid var(--line-soft);
@@ -176,6 +186,7 @@ class LoopTopBar extends LitElement {
     super();
     this._configOpen = false;
     this._config = { terminalMode: 'direct', gitName: '', gitEmail: '' };
+    this._patStatus = { configured: false, fromEnv: false };
     this._loadConfig();
   }
 
@@ -196,8 +207,12 @@ class LoopTopBar extends LitElement {
 
   async _loadConfig() {
     try {
-      const res = await fetch('/api/config');
-      if (res.ok) this._config = await res.json();
+      const [configRes, patRes] = await Promise.all([
+        fetch('/api/config'),
+        fetch('/api/config/github-pat'),
+      ]);
+      if (configRes.ok) this._config = await configRes.json();
+      if (patRes.ok) this._patStatus = await patRes.json();
     } catch {}
   }
 
@@ -224,6 +239,22 @@ class LoopTopBar extends LitElement {
   _onEmailBlur(e) {
     const val = e.target.value.trim();
     if (val !== this._config.gitEmail) this._patchConfig({ gitEmail: val });
+  }
+
+  async _onPatBlur(e) {
+    const val = e.target.value;
+    if (!val) return;
+    try {
+      const res = await fetch('/api/config/github-pat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pat: val }),
+      });
+      if (res.ok) {
+        this._patStatus = await res.json();
+        e.target.value = '';
+      }
+    } catch {}
   }
 
   _togglePopup(e) {
@@ -292,6 +323,21 @@ class LoopTopBar extends LitElement {
                       @click=${() => this._setTerminalMode('direct')}
                     >direct</button>
                   </div>
+                </div>
+                <hr class="config-divider" />
+                <div class="config-row">
+                  <div class="config-label">GitHub PAT</div>
+                  <input
+                    class="config-input"
+                    type="password"
+                    ?disabled=${this._patStatus.fromEnv}
+                    placeholder=${this._patStatus.fromEnv ? 'Set via environment variable' : this._patStatus.configured ? 'Set — enter new value to replace' : 'ghp_…'}
+                    @blur=${this._onPatBlur}
+                    @keydown=${e => e.key === 'Enter' && e.target.blur()}
+                  />
+                  ${this._patStatus.fromEnv ? html`
+                    <div class="config-hint">Token is provided by the <code>GITHUB_TOKEN</code> environment variable.</div>
+                  ` : ''}
                 </div>
               </div>
             ` : ''}
