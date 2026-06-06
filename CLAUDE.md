@@ -19,11 +19,10 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 
 ```jsonc
 {
-  "nextId": 100,
   "config": { "terminalMode": "direct" },   // "direct" | "tmux"
   "projects": [
     {
-      "id": "quill",                          // URL-safe slug, unique
+      "id": "quill",                          // URL-safe slug derived from name, unique
       "name": "quill",
       "repo": "github.com/...",
       "description": "...",

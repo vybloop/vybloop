@@ -19,7 +19,7 @@ export const TEMPLATES = [
   { id: 'expo', name: 'Expo (React Native)' },
 ];
 
-const DEFAULT_DB = { nextId: 1, projects: [], config: { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' } };
+const DEFAULT_DB = { projects: [], config: { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' } };
 const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' };
 
 function load() {
@@ -28,7 +28,6 @@ function load() {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_DB };
     return {
-      nextId: parsed.nextId ?? 1,
       projects: parsed.projects ?? [],
       config: { ...DEFAULT_CONFIG, ...(parsed.config ?? {}) },
     };
@@ -44,7 +43,6 @@ function save(db) {
 
 const db = load();
 let projects = db.projects.map(({ status, ...p }) => p);
-let nextId = db.nextId;
 let config = db.config;
 
 const projectStatus = {};
@@ -54,7 +52,6 @@ for (const p of projects) {
 
 function persist() {
   db.projects = projects;
-  db.nextId = nextId;
   db.config = config;
   save(db);
 }
@@ -380,7 +377,10 @@ export async function getProject(id) {
 }
 
 export function createProject(data) {
-  const id = data.name.toLowerCase().replace(/[^a-z0-9-]/g, '-') + '-' + (nextId++);
+  const id = data.name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  if (projects.some(p => p.id === id)) {
+    return { error: 'a project with this name already exists' };
+  }
   const project = {
     id,
     name: data.name,
