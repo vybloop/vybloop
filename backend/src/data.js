@@ -2,22 +2,11 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSy
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve, normalize, basename, relative } from 'path';
 import { spawn, execFile } from 'child_process';
+import { getTemplateClaudeMd } from './templates.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DB_PATH = join(__dirname, '../../data/projects.json');
-
-export const TEMPLATES = [
-  { id: 'blank', name: 'Blank workspace' },
-  { id: 'nextjs-tailwind', name: 'Next.js + Tailwind' },
-  { id: 'vite-react', name: 'Vite + React' },
-  { id: 'sveltekit', name: 'SvelteKit' },
-  { id: 'astro', name: 'Astro' },
-  { id: 'remix', name: 'Remix' },
-  { id: 'rust-cli', name: 'Rust CLI (clap)' },
-  { id: 'fastapi-postgres', name: 'FastAPI + Postgres' },
-  { id: 'expo', name: 'Expo (React Native)' },
-];
 
 const DEFAULT_DB = { projects: [], config: { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' } };
 const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' };
@@ -351,6 +340,30 @@ export function cloneRepo(id, repoUrl) {
     } else {
       projectStatus[id] = 'error';
     }
+  });
+}
+
+// Initialize a fresh project (no repo to clone): create the git directory,
+// write the template's CLAUDE.md, run `git init`, and fix ownership so the
+// inner container's root maps correctly.
+export function initProject(id, template) {
+  const dataDir = `/data/${id}`;
+  const destDir = gitDir(id);
+  mkdirSync(destDir, { recursive: true });
+
+  const claudeMd = getTemplateClaudeMd(template);
+  if (claudeMd) {
+    writeFileSync(join(destDir, 'CLAUDE.md'), claudeMd, 'utf8');
+  }
+
+  execFile('git', ['init'], { cwd: destDir }, (err) => {
+    if (err) {
+      console.log(`[git] init failed for ${id}: ${err.message}`);
+      projectStatus[id] = 'error';
+      return;
+    }
+    const owner = `${process.getuid()}:${process.getgid()}`;
+    execFile('chown', ['-R', owner, dataDir], () => {});
   });
 }
 

@@ -2,23 +2,12 @@ import { LitElement, html, css } from 'lit';
 import './loop-top-bar.js';
 import { iconArrowLeft, iconChevronDown, iconCheck } from './icons.js';
 
-const TEMPLATES = [
-  { id: 'blank', name: 'Blank workspace' },
-  { id: 'nextjs-tailwind', name: 'Next.js + Tailwind' },
-  { id: 'vite-react', name: 'Vite + React' },
-  { id: 'sveltekit', name: 'SvelteKit' },
-  { id: 'astro', name: 'Astro' },
-  { id: 'remix', name: 'Remix' },
-  { id: 'rust-cli', name: 'Rust CLI (clap)' },
-  { id: 'fastapi-postgres', name: 'FastAPI + Postgres' },
-  { id: 'expo', name: 'Expo (React Native)' },
-];
-
 class LoopNewProjectScreen extends LitElement {
   static properties = {
     _name: { state: true },
     _repo: { state: true },
     _template: { state: true },
+    _templates: { state: true },
     _branch: { state: true },
     _setupCmd: { state: true },
     _showAdvanced: { state: true },
@@ -135,6 +124,10 @@ class LoopNewProjectScreen extends LitElement {
     .dropdown-trigger:focus, .dropdown-trigger.open {
       border-color: var(--accent);
       outline: none;
+    }
+    .dropdown-trigger:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
     }
     .dropdown-chevron {
       color: var(--fg-3);
@@ -306,6 +299,7 @@ class LoopNewProjectScreen extends LitElement {
     this._name = '';
     this._repo = '';
     this._template = 'blank';
+    this._templates = [{ id: 'blank', name: 'Blank workspace' }];
     this._branch = '';
     this._setupCmd = '';
     this._showAdvanced = false;
@@ -318,6 +312,24 @@ class LoopNewProjectScreen extends LitElement {
     this._githubPrivate = false;
     this._githubCreating = false;
     this._githubError = '';
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._loadTemplates();
+  }
+
+  async _loadTemplates() {
+    try {
+      const res = await fetch('/api/templates');
+      if (!res.ok) return;
+      const templates = await res.json();
+      if (Array.isArray(templates) && templates.length) {
+        this._templates = templates;
+      }
+    } catch {
+      // Keep the default blank template if the request fails.
+    }
   }
 
   _deriveNameFromRepo(url) {
@@ -342,7 +354,7 @@ class LoopNewProjectScreen extends LitElement {
   }
 
   _templateLabel() {
-    return TEMPLATES.find(t => t.id === this._template)?.name || 'Blank workspace';
+    return this._templates.find(t => t.id === this._template)?.name || 'Blank workspace';
   }
 
   async _submit() {
@@ -459,19 +471,26 @@ class LoopNewProjectScreen extends LitElement {
         />
       </div>
 
+      ${(() => {
+        const hasRepo = !!this._repo.trim();
+        return html`
       <div class="field">
-        <label>Template</label>
+        <label>
+          Template
+          ${hasRepo ? html`<span class="label-hint">(using cloned repository)</span>` : ''}
+        </label>
         <div class="dropdown-wrap">
           <button
             class="dropdown-trigger ${this._templateOpen ? 'open' : ''}"
-            @click=${() => this._templateOpen = !this._templateOpen}
+            ?disabled=${hasRepo}
+            @click=${() => { if (!hasRepo) this._templateOpen = !this._templateOpen; }}
           >
-            <span>${this._templateLabel()}</span>
+            <span>${hasRepo ? 'Blank workspace' : this._templateLabel()}</span>
             <span class="dropdown-chevron ${this._templateOpen ? 'open' : ''}">${iconChevronDown}</span>
           </button>
-          ${this._templateOpen ? html`
+          ${this._templateOpen && !hasRepo ? html`
             <div class="dropdown-menu">
-              ${TEMPLATES.map(t => html`
+              ${this._templates.map(t => html`
                 <div
                   class="dropdown-item ${this._template === t.id ? 'selected' : ''}"
                   @click=${() => this._selectTemplate(t.id)}
@@ -484,6 +503,8 @@ class LoopNewProjectScreen extends LitElement {
           ` : ''}
         </div>
       </div>
+        `;
+      })()}
 
       <button
         class="advanced-toggle ${this._showAdvanced ? 'open' : ''}"

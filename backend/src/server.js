@@ -12,6 +12,7 @@ import {
   getProject,
   createProject,
   cloneRepo,
+  initProject,
   getChanges,
   commitChanges,
   setProjectStatus,
@@ -35,8 +36,8 @@ import {
   renameItem,
   deleteItem,
   searchFiles,
-  TEMPLATES,
 } from './data.js';
+import { listTemplates } from './templates.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
 import { startBuildCapture, startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
@@ -101,6 +102,7 @@ app.post('/api/projects', (req, res) => {
   const project = createProject({ name, repo, branch, template });
   if (project.error) return res.status(409).json({ error: project.error });
   if (repo) cloneRepo(project.id, repo);
+  else initProject(project.id, project.template);
   res.status(201).json(project);
 });
 
@@ -422,7 +424,7 @@ app.post('/api/projects/:id/fs/delete', async (req, res) => {
 });
 
 app.get('/api/templates', (req, res) => {
-  res.json(TEMPLATES);
+  res.json(listTemplates());
 });
 
 app.get('/api/github/status', async (req, res) => {
