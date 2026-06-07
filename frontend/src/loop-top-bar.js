@@ -185,7 +185,7 @@ class LoopTopBar extends LitElement {
   constructor() {
     super();
     this._configOpen = false;
-    this._config = { terminalMode: 'direct', gitName: '', gitEmail: '' };
+    this._config = { terminalMode: 'direct', gitName: '', gitEmail: '', portRange: '22000-23000' };
     this._patStatus = { configured: false, fromEnv: false };
     this._loadConfig();
   }
@@ -239,6 +239,11 @@ class LoopTopBar extends LitElement {
   _onEmailBlur(e) {
     const val = e.target.value.trim();
     if (val !== this._config.gitEmail) this._patchConfig({ gitEmail: val });
+  }
+
+  _onPortRangeBlur(e) {
+    const val = e.target.value.trim();
+    if (val !== this._config.portRange) this._patchConfig({ portRange: val });
   }
 
   async _onPatBlur(e) {
@@ -323,6 +328,18 @@ class LoopTopBar extends LitElement {
                       @click=${() => this._setTerminalMode('direct')}
                     >direct</button>
                   </div>
+                </div>
+                <hr class="config-divider" />
+                <div class="config-row">
+                  <div class="config-label">Port range</div>
+                  <input
+                    class="config-input"
+                    type="text"
+                    placeholder="22000-23000"
+                    .value=${this._config.portRange || ''}
+                    @blur=${this._onPortRangeBlur}
+                    @keydown=${e => e.key === 'Enter' && e.target.blur()}
+                  />
                 </div>
                 <hr class="config-divider" />
                 <div class="config-row">

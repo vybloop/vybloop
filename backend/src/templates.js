@@ -62,7 +62,7 @@ Fill in the rest of this section based on the answers in the first section.
 ## File structure
 
 - Dockerfile - configure this to serve the game from a container
-- docker-compose.yml - configure this to serve the game from a container
+- docker-compose.yml - configure this to serve the game from a container. When creating this file, use port <PORT_PLACEHOLDER> if one has not been selected yet.
 - frontend/ - should contain front end code
 - backend/ - should contain backend code, if necessary
 

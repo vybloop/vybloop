@@ -8,8 +8,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DB_PATH = join(__dirname, '../../data/projects.json');
 
-const DEFAULT_DB = { projects: [], config: { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' } };
-const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '' };
+const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '', portRange: '22000-23000', nextPort: 22000 };
+const DEFAULT_DB = { projects: [], config: { ...DEFAULT_CONFIG } };
 
 function load() {
   try {
@@ -343,6 +343,30 @@ export function cloneRepo(id, repoUrl) {
   });
 }
 
+// Parse a "start-end" port range string into [start, end], falling back to the
+// default range when the value is missing or malformed.
+function parsePortRange(range) {
+  const m = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(range || '');
+  if (!m) return [22000, 23000];
+  const start = parseInt(m[1], 10);
+  const end = parseInt(m[2], 10);
+  if (end < start) return [22000, 23000];
+  return [start, end];
+}
+
+// Hand out the next port within the configured range, advancing (and wrapping)
+// the cursor persisted in the config so each project gets a distinct port.
+function allocatePort() {
+  const [start, end] = parsePortRange(config.portRange);
+  let port = config.nextPort;
+  if (typeof port !== 'number' || port < start || port > end) port = start;
+  let next = port + 1;
+  if (next > end) next = start;
+  config.nextPort = next;
+  persist();
+  return port;
+}
+
 // Initialize a fresh project (no repo to clone): create the git directory,
 // write the template's CLAUDE.md, run `git init`, and fix ownership so the
 // inner container's root maps correctly.
@@ -351,8 +375,11 @@ export function initProject(id, template) {
   const destDir = gitDir(id);
   mkdirSync(destDir, { recursive: true });
 
-  const claudeMd = getTemplateClaudeMd(template);
+  let claudeMd = getTemplateClaudeMd(template);
   if (claudeMd) {
+    if (claudeMd.includes('<PORT_PLACEHOLDER>')) {
+      claudeMd = claudeMd.replaceAll('<PORT_PLACEHOLDER>', String(allocatePort()));
+    }
     writeFileSync(join(destDir, 'CLAUDE.md'), claudeMd, 'utf8');
   }
 
@@ -547,10 +574,14 @@ export function getConfig() {
 }
 
 export function updateConfig(updates) {
-  const allowed = ['terminalMode', 'gitName', 'gitEmail'];
-  const prev = { gitName: config.gitName, gitEmail: config.gitEmail };
+  const allowed = ['terminalMode', 'gitName', 'gitEmail', 'portRange'];
+  const prev = { gitName: config.gitName, gitEmail: config.gitEmail, portRange: config.portRange };
   for (const key of allowed) {
     if (updates[key] !== undefined) config[key] = updates[key];
+  }
+  // When the range changes, restart the port cursor at the new range's start.
+  if (config.portRange !== prev.portRange) {
+    config.nextPort = parsePortRange(config.portRange)[0];
   }
   persist();
   if (config.gitName !== prev.gitName || config.gitEmail !== prev.gitEmail) {
