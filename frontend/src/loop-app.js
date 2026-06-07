@@ -69,6 +69,10 @@ class LoopApp extends LitElement {
       const { status } = JSON.parse(e.data);
       this._projects = this._projects.map(p => p.id === projectId ? { ...p, status } : p);
     });
+    this._projectSse.addEventListener('compose', (e) => {
+      const { hasCompose } = JSON.parse(e.data);
+      this._projects = this._projects.map(p => p.id === projectId ? { ...p, hasCompose } : p);
+    });
   }
 
   _applyLocation(location, push) {

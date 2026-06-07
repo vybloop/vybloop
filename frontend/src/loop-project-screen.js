@@ -1837,12 +1837,6 @@ class LoopProjectScreen extends LitElement {
       if (status !== 'running') this._stale = false;
       this._buildError = (status === 'error' && detail) ? detail : '';
     });
-    this._sse.addEventListener('compose', (e) => {
-      const { hasCompose } = JSON.parse(e.data);
-      if (this.project && this.project.hasCompose !== hasCompose) {
-        this.project = { ...this.project, hasCompose };
-      }
-    });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
     this._sse.addEventListener('stale', (e) => { this._stale = JSON.parse(e.data).stale; });
     this._sse.addEventListener('agent-done', () => {
