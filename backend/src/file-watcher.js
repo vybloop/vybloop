@@ -1,5 +1,5 @@
 import chokidar from 'chokidar';
-import { getChanges, getFileTree } from './data.js';
+import { getChanges, getFileTree, getHasCompose } from './data.js';
 
 const watchers = new Map();
 const runStartTimes = new Map(); // projectId -> start timestamp (ms)
@@ -11,6 +11,7 @@ class ProjectWatcher {
     this.clients = new Set();
     this._debounceTimer = null;
     this._chokidar = null;
+    this._hasCompose = getHasCompose(projectId);
   }
 
   _start() {
@@ -48,10 +49,15 @@ class ProjectWatcher {
     }
     const nowStale = !wasStale && staleProjects.has(this.projectId);
 
+    const hasCompose = getHasCompose(this.projectId);
+    const composeChanged = hasCompose !== this._hasCompose;
+    this._hasCompose = hasCompose;
+
     for (const res of this.clients) {
       if (changes !== null) sendEvent(res, 'changes', changes);
       sendEvent(res, 'files', tree ?? []);
       if (nowStale) sendEvent(res, 'stale', { stale: true });
+      if (composeChanged) sendEvent(res, 'compose', { hasCompose });
     }
   }
 
