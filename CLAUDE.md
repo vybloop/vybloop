@@ -53,6 +53,8 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 | `GET` | `/api/templates` | List available project templates. |
 | `GET` | `/api/config` | Get config (e.g. `terminalMode`). |
 | `PATCH` | `/api/config` | Update config. |
+| `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current `claude-inner` image. |
+| `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. |
 
 WebSocket endpoint: `ws://host/api/projects/:id/ws/:type` where `type` is `agent` or `shell`.
 

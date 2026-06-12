@@ -68,6 +68,10 @@ export const iconClose = iconBase(svg`
   <path d="M6 6l12 12M18 6 6 18"/>
 `);
 
+export const iconMenu = iconBase(svg`
+  <path d="M3 6h18M3 12h18M3 18h18"/>
+`);
+
 export const iconSettings = iconBase(svg`
   <circle cx="12" cy="12" r="3"/>
   <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>

@@ -1,11 +1,13 @@
 import { LitElement, html, css } from 'lit';
-import { iconSettings } from './icons.js';
+import { iconMenu } from './icons.js';
 
 class LoopTopBar extends LitElement {
   static properties = {
     _configOpen: { state: true },
     _config: { state: true },
     _patStatus: { state: true },
+    _menuOpen: { state: true },
+    _sandboxBusy: { state: true },
   };
 
   static styles = css`
@@ -74,6 +76,35 @@ class LoopTopBar extends LitElement {
     }
     .avatar-wrap {
       position: relative;
+    }
+    .menu-wrap {
+      position: relative;
+    }
+    .menu-popup {
+      padding: 6px;
+      min-width: 180px;
+    }
+    .menu-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border: none;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--fg-1);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .menu-item:hover:not(:disabled) {
+      background: var(--bg-3);
+      color: var(--fg-0);
+    }
+    .menu-item:disabled {
+      opacity: 0.5;
+      cursor: default;
     }
     .avatar {
       width: 28px;
@@ -187,14 +218,17 @@ class LoopTopBar extends LitElement {
     this._configOpen = false;
     this._config = { terminalMode: 'direct', gitName: '', gitEmail: '', portRange: '22000-23000' };
     this._patStatus = { configured: false, fromEnv: false };
+    this._menuOpen = false;
+    this._sandboxBusy = '';
     this._loadConfig();
   }
 
   connectedCallback() {
     super.connectedCallback();
     this._outsideClick = (e) => {
-      if (this._configOpen && !e.composedPath().includes(this)) {
+      if ((this._configOpen || this._menuOpen) && !e.composedPath().includes(this)) {
         this._configOpen = false;
+        this._menuOpen = false;
       }
     };
     document.addEventListener('click', this._outsideClick);
@@ -267,6 +301,28 @@ class LoopTopBar extends LitElement {
     this._configOpen = !this._configOpen;
   }
 
+  _toggleMenu(e) {
+    e.stopPropagation();
+    this._menuOpen = !this._menuOpen;
+  }
+
+  async _sandboxAction(action) {
+    if (this._sandboxBusy) return;
+    this._sandboxBusy = action;
+    try {
+      const res = await fetch(`/api/sandbox/${action}`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      this._menuOpen = false;
+    } catch (err) {
+      alert(`Sandbox ${action} failed: ${err.message}`);
+    } finally {
+      this._sandboxBusy = '';
+    }
+  }
+
   render() {
     return html`
       <div class="topbar">
@@ -285,7 +341,23 @@ class LoopTopBar extends LitElement {
           </div>
         </div>
         <div class="right">
-          <button class="icon-btn" title="Settings">${iconSettings}</button>
+          <div class="menu-wrap">
+            <button class="icon-btn" title="Menu" @click=${this._toggleMenu}>${iconMenu}</button>
+            ${this._menuOpen ? html`
+              <div class="config-popup menu-popup">
+                <button
+                  class="menu-item"
+                  ?disabled=${!!this._sandboxBusy}
+                  @click=${() => this._sandboxAction('rebuild')}
+                >${this._sandboxBusy === 'rebuild' ? 'Rebuilding sandbox…' : 'Rebuild sandbox'}</button>
+                <button
+                  class="menu-item"
+                  ?disabled=${!!this._sandboxBusy}
+                  @click=${() => this._sandboxAction('restart')}
+                >${this._sandboxBusy === 'restart' ? 'Restarting sandbox…' : 'Restart sandbox'}</button>
+              </div>
+            ` : ''}
+          </div>
           <div class="avatar-wrap">
             <div class="avatar" @click=${this._togglePopup}>
               ${this._config.gitName ? this._config.gitName.trim()[0].toUpperCase() : '?'}

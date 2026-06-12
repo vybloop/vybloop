@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
+import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
 import { TerminalSession, DirectSession } from './terminal-session.js';
 import {
   getProjects,
@@ -594,6 +596,53 @@ async function getOrCreateSession(projectId, type, repoPath) {
   sessions.set(key, session);
   return session;
 }
+
+// Tear down all live agent/shell sessions (the per-project `claude-inner`
+// containers) so they respawn fresh on the next WebSocket reconnect. Used by the
+// sandbox restart/rebuild endpoints to pick up image or config changes.
+async function destroyAllSessions() {
+  const all = [...sessions.values()];
+  sessions.clear();
+  await Promise.all(all.map(s => s.destroy().catch(() => {})));
+}
+
+const INNER_CONTAINER_DIR = join(__dirname, '../inner-container');
+
+// Rebuild the `claude-inner` sandbox image. Mirrors the build in start.sh,
+// stamping the Dockerfile hash label so start.sh won't redundantly rebuild.
+async function rebuildSandboxImage() {
+  const dockerfile = readFileSync(join(INNER_CONTAINER_DIR, 'Dockerfile'));
+  const hash = createHash('sha256').update(dockerfile).digest('hex');
+  await execFileAsync('podman', [
+    'build', '-t', 'claude-inner',
+    '--label', `dockerfile-hash=${hash}`,
+    INNER_CONTAINER_DIR,
+  ], { timeout: 600_000 });
+}
+
+// Restart the sandbox: kill running sessions so they reconnect with the current
+// image. Does not rebuild — use /api/sandbox/rebuild for that.
+app.post('/api/sandbox/restart', async (req, res) => {
+  try {
+    await destroyAllSessions();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Sandbox restart failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Rebuild the sandbox image, then restart sessions so the new image takes effect.
+app.post('/api/sandbox/rebuild', async (req, res) => {
+  try {
+    await destroyAllSessions();
+    await rebuildSandboxImage();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Sandbox rebuild failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
