@@ -7,7 +7,7 @@ import { dirname, join, extname } from 'path';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { createHash } from 'crypto';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { TerminalSession, DirectSession } from './terminal-session.js';
 import {
   getProjects,
@@ -668,6 +668,18 @@ wss.on('connection', async (ws, req, projectId, sessionType) => {
   }
 
   const repoPath = `/data/${projectId}/git`;
+
+  // The agent/shell container bind-mounts repoPath into /project. If the repo
+  // dir doesn't exist (e.g. the clone failed or hasn't finished), podman fails
+  // with a cryptic "statfs <path>: no such file or directory" that only shows
+  // up in the terminal stream. Catch it here so we log it and tell the user.
+  if ((sessionType === 'agent' || sessionType === 'shell') && !existsSync(repoPath)) {
+    console.error(`[ws] ${projectId}/${sessionType}: repo path ${repoPath} does not exist (clone failed or incomplete); refusing to start session`);
+    ws.send(Buffer.from(`\r\n\x1b[31mProject repository is not available at ${repoPath}.\r\nThe clone may have failed or is still in progress — check the server logs.\x1b[0m\r\n`));
+    ws.close(1011, 'repo not available');
+    return;
+  }
+
   const session = await getOrCreateSession(projectId, sessionType, repoPath);
 
   if (!session) {

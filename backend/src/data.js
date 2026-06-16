@@ -323,13 +323,33 @@ export function cloneRepo(id, repoUrl) {
   const destDir = gitDir(id);
   mkdirSync(dataDir, { recursive: true });
   projectStatus[id] = 'cloning';
+  // Log the original URL, never cloneUrl — the latter may embed a GitHub token.
+  console.log(`[clone] ${id}: cloning ${repoUrl} -> ${destDir}`);
 
   const proc = spawn('git', ['clone', cloneUrl, destDir]);
+
+  // Capture git's progress/error output so a failed clone isn't silent.
+  let stderr = '';
+  proc.stderr?.on('data', d => { stderr += d.toString(); });
+
+  // spawn() itself can fail (e.g. git not on PATH); without this the error is
+  // unhandled and the project is left stuck in 'cloning' with no log line.
+  proc.on('error', (err) => {
+    console.error(`[clone] ${id}: failed to spawn git: ${err.message}`);
+    projectStatus[id] = 'error';
+  });
+
   proc.on('close', (code) => {
     if (code === 0) {
       // Files must be owned by whoever runs podman so the inner container's root maps correctly
       const owner = `${process.getuid()}:${process.getgid()}`;
-      execFile('chown', ['-R', owner, dataDir], () => {
+      execFile('chown', ['-R', owner, dataDir], (err) => {
+        if (err) {
+          console.error(`[clone] ${id}: chown failed: ${err.message}`);
+          projectStatus[id] = 'error';
+          return;
+        }
+        console.log(`[clone] ${id}: done`);
         projectStatus[id] = 'idle';
         const project = projects.find(p => p.id === id);
         if (project) {
@@ -338,6 +358,7 @@ export function cloneRepo(id, repoUrl) {
         }
       });
     } else {
+      console.error(`[clone] ${id}: git clone exited with code ${code}${stderr ? `\n${stderr.trim()}` : ''}`);
       projectStatus[id] = 'error';
     }
   });
