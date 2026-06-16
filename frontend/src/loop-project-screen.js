@@ -83,7 +83,10 @@ class LoopProjectScreen extends LitElement {
     _logEmpty: { state: true },
     _dragOverFiles: { state: true },
     _dropTargetDir: { state: true },
+    _draggingPath: { state: true },
     _uploading: { state: true },
+    _selectedFiles: { state: true },
+    _lastSelectedFile: { state: true },
     _contextMenu: { state: true },
     _changesContextMenu: { state: true },
     _dialogInput: { state: true },
@@ -1002,6 +1005,9 @@ class LoopProjectScreen extends LitElement {
     .tree-node.selected .tree-node-name {
       color: var(--accent);
     }
+    .tree-node.dragging {
+      opacity: 0.4;
+    }
 
     /* File tabs */
     .tabs {
@@ -1348,7 +1354,10 @@ class LoopProjectScreen extends LitElement {
     this._logEmpty = true;
     this._dragOverFiles = false;
     this._dropTargetDir = null;
+    this._draggingPath = null;
     this._uploading = false;
+    this._selectedFiles = new Set();
+    this._lastSelectedFile = null;
     this._contextMenu = null;  // null | { x, y, path, isDir }
     this._changesContextMenu = null;  // null | { x, y, file }
     this._dialogInput = '';
@@ -1680,11 +1689,17 @@ class LoopProjectScreen extends LitElement {
   }
 
   _onTreeDragOver(e, dirPath) {
-    if (!e.dataTransfer.types.includes('Files')) return;
+    const isInternal = e.dataTransfer.types.includes('text/x-loop-filepath');
+    const isExternalFile = e.dataTransfer.types.includes('Files');
+    if (!isInternal && !isExternalFile) return;
+    if (isInternal && this._draggingPath) {
+      const drag = this._draggingPath;
+      if (dirPath === drag || (dirPath && dirPath.startsWith(drag + '/'))) return;
+    }
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-    this._dragOverFiles = true;
+    e.dataTransfer.dropEffect = isInternal ? 'move' : 'copy';
+    this._dragOverFiles = isExternalFile;
     this._dropTargetDir = dirPath;
   }
 
@@ -1700,8 +1715,75 @@ class LoopProjectScreen extends LitElement {
     const dir = this._dropTargetDir;
     this._dragOverFiles = false;
     this._dropTargetDir = null;
+    this._draggingPath = null;
+    const internalPath = e.dataTransfer.getData('text/x-loop-filepath');
+    if (internalPath) {
+      this._moveItem(internalPath, dir ?? '');
+      return;
+    }
     const files = Array.from(e.dataTransfer.files);
     if (files.length) this._uploadFiles(files, dir);
+  }
+
+  async _moveItem(fromPath, toDir) {
+    if (!this.project) return;
+    const name = fromPath.split('/').pop();
+    const newPath = toDir ? `${toDir}/${name}` : name;
+    if (newPath === fromPath) return;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/fs/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPath: fromPath, newPath }),
+      });
+      if (res.ok) {
+        const affectedFiles = this._openFiles.filter(f => f.path === fromPath || f.path.startsWith(fromPath + '/'));
+        affectedFiles.forEach(f => this._confirmClose(f.path));
+        const affectedImages = this._openImages.filter(p => p === fromPath || p.startsWith(fromPath + '/'));
+        affectedImages.forEach(p => this._closeImage(p));
+        await this._loadFileTree();
+        this._loadChanges();
+      }
+    } catch (e) {
+      console.error('Failed to move', e);
+    }
+  }
+
+  _getFlatFilePaths(nodes = this._fileTree ?? [], parentPath = '') {
+    const result = [];
+    for (const node of nodes) {
+      const nodePath = parentPath ? `${parentPath}/${node.name}` : node.name;
+      if (node.type === 'file') {
+        result.push(nodePath);
+      } else if (node.type === 'dir' && this._expandedDirs.has(nodePath) && node.children) {
+        result.push(...this._getFlatFilePaths(node.children, nodePath));
+      }
+    }
+    return result;
+  }
+
+  _handleFileClick(e, nodePath) {
+    if (e.ctrlKey || e.metaKey) {
+      const next = new Set(this._selectedFiles);
+      if (next.has(nodePath)) next.delete(nodePath);
+      else next.add(nodePath);
+      this._selectedFiles = next;
+      this._lastSelectedFile = nodePath;
+    } else if (e.shiftKey && this._lastSelectedFile) {
+      const flatPaths = this._getFlatFilePaths();
+      const lastIdx = flatPaths.indexOf(this._lastSelectedFile);
+      const currIdx = flatPaths.indexOf(nodePath);
+      if (lastIdx >= 0 && currIdx >= 0) {
+        const [from, to] = lastIdx < currIdx ? [lastIdx, currIdx] : [currIdx, lastIdx];
+        const next = new Set(this._selectedFiles);
+        for (let i = from; i <= to; i++) next.add(flatPaths[i]);
+        this._selectedFiles = next;
+      }
+    } else {
+      this._selectedFiles = new Set([nodePath]);
+      this._lastSelectedFile = nodePath;
+      this._openFile(nodePath);
+    }
   }
 
   _showContextMenu(e, path, isDir) {
@@ -2350,16 +2432,51 @@ class LoopProjectScreen extends LitElement {
     const m = this._contextMenu;
     if (!m) return '';
     const fileParent = m.isDir ? m.path : (m.path.includes('/') ? m.path.split('/').slice(0, -1).join('/') : '');
+    const multiSelected = this._selectedFiles.size > 1 && this._selectedFiles.has(m.path);
     return html`
       <div class="ctx-menu" style="left:${m.x}px;top:${m.y}px" @click=${e => e.stopPropagation()}>
-        <button class="ctx-menu-item" @click=${() => this._openCreateFolderDialog(fileParent)}>
-          New folder${m.isDir ? ' inside' : ' here'}
-        </button>
-        <div class="ctx-menu-sep"></div>
-        <button class="ctx-menu-item" @click=${() => this._openRenameDialog(m.path, m.isDir)}>Rename</button>
-        <button class="ctx-menu-item danger" @click=${() => this._openDeleteDialog(m.path, m.isDir)}>Delete</button>
+        ${!multiSelected ? html`
+          <button class="ctx-menu-item" @click=${() => this._openCreateFolderDialog(fileParent)}>
+            New folder${m.isDir ? ' inside' : ' here'}
+          </button>
+          <div class="ctx-menu-sep"></div>
+          <button class="ctx-menu-item" @click=${() => this._openRenameDialog(m.path, m.isDir)}>Rename</button>
+        ` : ''}
+        <button class="ctx-menu-item danger" @click=${() => {
+          this._contextMenu = null;
+          if (multiSelected) {
+            this._deleteSelected();
+          } else {
+            this._openDeleteDialog(m.path, m.isDir);
+          }
+        }}>Delete${multiSelected ? ` ${this._selectedFiles.size} files` : ''}</button>
       </div>
     `;
+  }
+
+  async _deleteSelected() {
+    if (!this.project) return;
+    const paths = [...this._selectedFiles];
+    for (const path of paths) {
+      try {
+        const res = await fetch(`/api/projects/${this.project.id}/fs/delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path }),
+        });
+        if (res.ok) {
+          const affected = this._openFiles.filter(f => f.path === path || f.path.startsWith(path + '/'));
+          affected.forEach(f => this._confirmClose(f.path));
+          const affectedImages = this._openImages.filter(p => p === path || p.startsWith(path + '/'));
+          affectedImages.forEach(p => this._closeImage(p));
+        }
+      } catch (e) {
+        console.error('Failed to delete', path, e);
+      }
+    }
+    this._selectedFiles = new Set();
+    await this._loadFileTree();
+    this._loadChanges();
   }
 
   _renderChangesContextMenu() {
@@ -2676,9 +2793,14 @@ class LoopProjectScreen extends LitElement {
       if (node.type === 'dir') {
         const open = this._expandedDirs.has(nodePath);
         const isDropTarget = this._dropTargetDir === nodePath;
+        const isDragging = this._draggingPath === nodePath;
         return html`
-          <div class="tree-node ${isDropTarget ? 'drop-target' : ''}" style="padding-left:${12 + indent}px"
+          <div class="tree-node ${isDropTarget ? 'drop-target' : ''} ${isDragging ? 'dragging' : ''}" style="padding-left:${12 + indent}px"
+            draggable="true"
+            @dragstart=${(e) => { this._draggingPath = nodePath; e.dataTransfer.setData('text/x-loop-filepath', nodePath); e.dataTransfer.effectAllowed = 'move'; }}
+            @dragend=${() => { this._draggingPath = null; this._dropTargetDir = null; }}
             @dragover=${(e) => this._onTreeDragOver(e, nodePath)}
+            @drop=${(e) => this._onTreeDrop(e)}
             @contextmenu=${(e) => this._showContextMenu(e, nodePath, true)}
           >
             <button class="tree-dir-toggle" @click=${(e) => { e.stopPropagation(); this._toggleDir(nodePath); }}>
@@ -2694,12 +2816,16 @@ class LoopProjectScreen extends LitElement {
           ${open ? this._renderTreeNodes(node.children, depth + 1, nodePath) : ''}
         `;
       } else {
-        const isSelected = this._activeTab === nodePath || this._openFiles.some(f => f.path === nodePath);
+        const isSelected = this._selectedFiles.has(nodePath);
+        const isDragging = this._draggingPath === nodePath;
         return html`
           <div
-            class="tree-node ${isSelected ? 'selected' : ''}"
+            class="tree-node ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}"
             style="padding-left:${12 + indent + 15}px;cursor:pointer"
-            @click=${() => this._openFile(nodePath)}
+            draggable="true"
+            @dragstart=${(e) => { this._draggingPath = nodePath; e.dataTransfer.setData('text/x-loop-filepath', nodePath); e.dataTransfer.effectAllowed = 'move'; }}
+            @dragend=${() => { this._draggingPath = null; this._dropTargetDir = null; }}
+            @click=${(e) => this._handleFileClick(e, nodePath)}
             @contextmenu=${(e) => this._showContextMenu(e, nodePath, false)}
           >
             <svg class="tree-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -2910,6 +3036,7 @@ class LoopProjectScreen extends LitElement {
 
           ${this._filesOpen ? html`
             <div class="file-tree ${this._dragOverFiles ? 'drag-over' : ''}"
+              @click=${(e) => { if (e.target === e.currentTarget) this._selectedFiles = new Set(); }}
               @dragover=${(e) => this._onTreeDragOver(e, null)}
               @dragleave=${(e) => this._onTreeDragLeave(e)}
               @drop=${(e) => this._onTreeDrop(e)}
@@ -2924,6 +3051,13 @@ class LoopProjectScreen extends LitElement {
                   ${this._dropTargetDir
                     ? `Drop to upload into ${this._dropTargetDir}/`
                     : 'Drop to upload to project root'
+                  }
+                </div>
+              ` : this._draggingPath && this._dropTargetDir !== null ? html`
+                <div class="upload-hint">
+                  ${this._dropTargetDir
+                    ? `Move into ${this._dropTargetDir}/`
+                    : 'Move to project root'
                   }
                 </div>
               ` : ''}
