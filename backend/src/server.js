@@ -613,8 +613,11 @@ const INNER_CONTAINER_DIR = join(__dirname, '../inner-container');
 async function rebuildSandboxImage() {
   const dockerfile = readFileSync(join(INNER_CONTAINER_DIR, 'Dockerfile'));
   const hash = createHash('sha256').update(dockerfile).digest('hex');
+  // --no-cache forces every layer to rebuild, including the `npm install -g
+  // @anthropic-ai/claude-code` layer — otherwise podman reuses the cached layer
+  // and the sandbox keeps an old Claude Code version even after a "rebuild".
   await execFileAsync('podman', [
-    'build', '-t', 'claude-inner',
+    'build', '--no-cache', '-t', 'claude-inner',
     '--label', `dockerfile-hash=${hash}`,
     INNER_CONTAINER_DIR,
   ], { timeout: 600_000 });

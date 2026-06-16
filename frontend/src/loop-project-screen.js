@@ -1361,10 +1361,12 @@ class LoopProjectScreen extends LitElement {
     this._stale = false;
     this._buildError = '';
     this._fileModels = new Map();       // path -> monaco.ITextModel
+    this._fileViewStates = new Map();   // path -> IEditorViewState
     this._fileMtimes = new Map();       // path -> server mtime
     this._fileCleanVersions = new Map(); // path -> alternativeVersionId at last save/load
     this._fileChangeListeners = new Map(); // path -> IDisposable
     this._diffModels = new Map();       // tabId -> { original, modified } ITextModel pair
+    this._diffViewStates = new Map();   // tabId -> IDiffEditorViewState
     this._diffMtimes = new Map();       // tabId -> server mtime
     this._diffCleanVersions = new Map(); // tabId -> alternativeVersionId at last save/load
     this._diffChangeListeners = new Map(); // tabId -> IDisposable
@@ -1432,6 +1434,14 @@ class LoopProjectScreen extends LitElement {
       }
     }
     if (changed.has('_activeTab')) {
+      const prevTab = changed.get('_activeTab');
+      // Save view state for the tab we're leaving
+      if (this._isFilePath(prevTab) && this._monacoEditor) {
+        this._fileViewStates.set(prevTab, this._monacoEditor.saveViewState());
+      } else if (this._isDiffTab(prevTab) && this._monacoDiffEditor) {
+        this._diffViewStates.set(prevTab, this._monacoDiffEditor.saveViewState());
+      }
+
       if (this._activeTab === 'logs') {
         this._connectLogs();
         this._logAutoScroll = true;
@@ -1450,7 +1460,13 @@ class LoopProjectScreen extends LitElement {
         this._ensureMonaco();
         if (this._monacoEditor) {
           this._monacoEditor.setModel(this._fileModels.get(this._activeTab) ?? null);
-          requestAnimationFrame(() => { this._monacoEditor?.layout(); this._applyPendingNav(); this._monacoEditor?.focus(); });
+          const savedState = this._fileViewStates.get(this._activeTab);
+          requestAnimationFrame(() => {
+            this._monacoEditor?.layout();
+            if (savedState) this._monacoEditor?.restoreViewState(savedState);
+            this._applyPendingNav();
+            this._monacoEditor?.focus();
+          });
         }
         this._startPolling(true);
       } else if (this._isDiffTab(this._activeTab)) {
@@ -1458,7 +1474,11 @@ class LoopProjectScreen extends LitElement {
         this._ensureMonacoDiff();
         if (this._monacoDiffEditor) {
           const models = this._diffModels.get(this._activeTab);
-          if (models) this._monacoDiffEditor.setModel(models);
+          if (models) {
+            this._monacoDiffEditor.setModel(models);
+            const savedState = this._diffViewStates.get(this._activeTab);
+            if (savedState) requestAnimationFrame(() => this._monacoDiffEditor?.restoreViewState(savedState));
+          }
         }
       } else {
         this._stopPolling();
@@ -1494,8 +1514,10 @@ class LoopProjectScreen extends LitElement {
     this._fileChangeListeners.clear();
     this._fileModels.forEach(m => m.dispose());
     this._fileModels.clear();
+    this._fileViewStates.clear();
     this._diffModels.forEach(({ original, modified }) => { original?.dispose(); modified?.dispose(); });
     this._diffModels.clear();
+    this._diffViewStates.clear();
     this._diffChangeListeners.forEach(d => d.dispose());
     this._diffChangeListeners.clear();
     this._diffMtimes.clear();
@@ -1957,6 +1979,7 @@ class LoopProjectScreen extends LitElement {
     this._fileChangeListeners.delete(path);
     this._fileModels.get(path)?.dispose();
     this._fileModels.delete(path);
+    this._fileViewStates.delete(path);
     this._fileMtimes.delete(path);
     this._fileCleanVersions.delete(path);
     const remaining = this._openFiles.filter(f => f.path !== path);
@@ -2028,6 +2051,7 @@ class LoopProjectScreen extends LitElement {
     const models = this._diffModels.get(tabId);
     if (models) { models.original?.dispose(); models.modified?.dispose(); }
     this._diffModels.delete(tabId);
+    this._diffViewStates.delete(tabId);
     this._diffChangeListeners.get(tabId)?.dispose();
     this._diffChangeListeners.delete(tabId);
     this._diffMtimes.delete(tabId);
