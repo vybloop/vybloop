@@ -13,6 +13,7 @@ class LoopNewProjectScreen extends LitElement {
     _showAdvanced: { state: true },
     _templateOpen: { state: true },
     _submitting: { state: true },
+    _cloning: { state: true },
     _error: { state: true },
     _step: { state: true },
     _githubInfo: { state: true },
@@ -305,6 +306,7 @@ class LoopNewProjectScreen extends LitElement {
     this._showAdvanced = false;
     this._templateOpen = false;
     this._submitting = false;
+    this._cloning = false;
     this._error = '';
     this._step = 'form';
     this._githubInfo = null;
@@ -424,7 +426,21 @@ class LoopNewProjectScreen extends LitElement {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Failed to create project');
       }
-      const project = await res.json();
+      let project = await res.json();
+
+      // Creation returns immediately while the clone runs in the background.
+      // Wait for it to finish so a clone failure is shown here, in the modal,
+      // rather than after we've already navigated to a broken project.
+      if (project.status === 'cloning') {
+        this._cloning = true;
+        project = await this._waitForClone(project.id);
+        if (project.status === 'error') {
+          this._error = project.statusError || 'Failed to clone the repository. Check the server logs.';
+          this._step = 'form';
+          return;
+        }
+      }
+
       this.dispatchEvent(new CustomEvent('project-created', {
         detail: { project },
         bubbles: true,
@@ -435,7 +451,27 @@ class LoopNewProjectScreen extends LitElement {
       this._step = 'form';
     } finally {
       this._submitting = false;
+      this._cloning = false;
     }
+  }
+
+  // Poll the project until its status leaves 'cloning'. Returns the final
+  // project (status 'idle' on success, 'error' on failure). Gives up after
+  // ~5 minutes and reports an error rather than waiting forever.
+  async _waitForClone(id) {
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const res = await fetch(`/api/projects/${id}`);
+        if (!res.ok) return { status: 'error', statusError: 'Project disappeared during clone.' };
+        const project = await res.json();
+        if (project.status !== 'cloning') return project;
+      } catch {
+        // Transient fetch error — keep polling until the deadline.
+      }
+    }
+    return { status: 'error', statusError: 'Timed out waiting for the repository to clone.' };
   }
 
   _cancel() {
@@ -545,7 +581,7 @@ class LoopNewProjectScreen extends LitElement {
           ?disabled=${this._submitting || !this._name.trim()}
           @click=${this._submit}
         >
-          ${this._submitting ? 'Checking…' : 'Create project'}
+          ${this._cloning ? 'Cloning repository…' : this._submitting ? 'Checking…' : 'Create project'}
         </button>
         <button class="btn-ghost" @click=${this._cancel}>Cancel</button>
       </div>
@@ -611,7 +647,7 @@ class LoopNewProjectScreen extends LitElement {
           ?disabled=${busy || !this._githubRepoName.trim()}
           @click=${this._createGithubRepo}
         >
-          ${this._githubCreating ? 'Creating repo…' : this._submitting ? 'Creating project…' : 'Create repository'}
+          ${this._githubCreating ? 'Creating repo…' : this._cloning ? 'Cloning repository…' : this._submitting ? 'Creating project…' : 'Create repository'}
         </button>
         <button
           class="btn-ghost"

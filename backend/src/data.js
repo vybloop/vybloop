@@ -39,6 +39,10 @@ for (const p of projects) {
   projectStatus[p.id] = 'idle';
 }
 
+// Last error message per project (e.g. why a clone failed), surfaced in the UI
+// alongside an 'error' status. Cleared when the project reaches a good state.
+const projectErrors = {};
+
 function persist() {
   db.projects = projects;
   db.config = config;
@@ -323,6 +327,7 @@ export function cloneRepo(id, repoUrl) {
   const destDir = gitDir(id);
   mkdirSync(dataDir, { recursive: true });
   projectStatus[id] = 'cloning';
+  delete projectErrors[id];
   // Log the original URL, never cloneUrl — the latter may embed a GitHub token.
   console.log(`[clone] ${id}: cloning ${repoUrl} -> ${destDir}`);
 
@@ -332,12 +337,15 @@ export function cloneRepo(id, repoUrl) {
   let stderr = '';
   proc.stderr?.on('data', d => { stderr += d.toString(); });
 
+  const fail = (message) => {
+    console.error(`[clone] ${id}: ${message}`);
+    projectStatus[id] = 'error';
+    projectErrors[id] = message;
+  };
+
   // spawn() itself can fail (e.g. git not on PATH); without this the error is
   // unhandled and the project is left stuck in 'cloning' with no log line.
-  proc.on('error', (err) => {
-    console.error(`[clone] ${id}: failed to spawn git: ${err.message}`);
-    projectStatus[id] = 'error';
-  });
+  proc.on('error', (err) => fail(`failed to spawn git: ${err.message}`));
 
   proc.on('close', (code) => {
     if (code === 0) {
@@ -345,12 +353,12 @@ export function cloneRepo(id, repoUrl) {
       const owner = `${process.getuid()}:${process.getgid()}`;
       execFile('chown', ['-R', owner, dataDir], (err) => {
         if (err) {
-          console.error(`[clone] ${id}: chown failed: ${err.message}`);
-          projectStatus[id] = 'error';
+          fail(`chown failed: ${err.message}`);
           return;
         }
         console.log(`[clone] ${id}: done`);
         projectStatus[id] = 'idle';
+        delete projectErrors[id];
         const project = projects.find(p => p.id === id);
         if (project) {
           project.lastActivity = new Date().toISOString();
@@ -358,8 +366,10 @@ export function cloneRepo(id, repoUrl) {
         }
       });
     } else {
-      console.error(`[clone] ${id}: git clone exited with code ${code}${stderr ? `\n${stderr.trim()}` : ''}`);
-      projectStatus[id] = 'error';
+      // Surface the tail of git's stderr — it carries the actionable reason
+      // (auth failure, repo not found, etc.) — while keeping the message short.
+      const reason = stderr.trim().split('\n').filter(Boolean).pop() || `git exited with code ${code}`;
+      fail(`git clone failed: ${reason}`);
     }
   });
 }
@@ -420,6 +430,7 @@ export async function getProjects() {
   return projects.map((p, i) => ({
     ...p,
     status: projectStatus[p.id] ?? 'idle',
+    statusError: projectErrors[p.id],
     changes: counts[i],
     hasCompose: getHasCompose(p.id),
   }));
@@ -432,6 +443,7 @@ export async function getProject(id) {
   return {
     ...p,
     status: projectStatus[p.id] ?? 'idle',
+    statusError: projectErrors[p.id],
     changes,
     hasCompose: getHasCompose(id),
   };
