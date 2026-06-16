@@ -1693,8 +1693,10 @@ class LoopProjectScreen extends LitElement {
     const isExternalFile = e.dataTransfer.types.includes('Files');
     if (!isInternal && !isExternalFile) return;
     if (isInternal && this._draggingPath) {
-      const drag = this._draggingPath;
-      if (dirPath === drag || (dirPath && dirPath.startsWith(drag + '/'))) return;
+      const itemsToMove = this._selectedFiles.has(this._draggingPath)
+        ? [...this._selectedFiles]
+        : [this._draggingPath];
+      if (itemsToMove.some(p => dirPath === p || (dirPath && dirPath.startsWith(p + '/')))) return;
     }
     e.preventDefault();
     e.stopPropagation();
@@ -1718,35 +1720,40 @@ class LoopProjectScreen extends LitElement {
     this._draggingPath = null;
     const internalPath = e.dataTransfer.getData('text/x-loop-filepath');
     if (internalPath) {
-      this._moveItem(internalPath, dir ?? '');
+      const pathsToMove = this._selectedFiles.has(internalPath) && this._selectedFiles.size > 1
+        ? [...this._selectedFiles]
+        : [internalPath];
+      this._moveItems(pathsToMove, dir ?? '');
       return;
     }
     const files = Array.from(e.dataTransfer.files);
     if (files.length) this._uploadFiles(files, dir);
   }
 
-  async _moveItem(fromPath, toDir) {
+  async _moveItems(fromPaths, toDir) {
     if (!this.project) return;
-    const name = fromPath.split('/').pop();
-    const newPath = toDir ? `${toDir}/${name}` : name;
-    if (newPath === fromPath) return;
-    try {
-      const res = await fetch(`/api/projects/${this.project.id}/fs/rename`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldPath: fromPath, newPath }),
-      });
-      if (res.ok) {
-        const affectedFiles = this._openFiles.filter(f => f.path === fromPath || f.path.startsWith(fromPath + '/'));
-        affectedFiles.forEach(f => this._confirmClose(f.path));
-        const affectedImages = this._openImages.filter(p => p === fromPath || p.startsWith(fromPath + '/'));
-        affectedImages.forEach(p => this._closeImage(p));
-        await this._loadFileTree();
-        this._loadChanges();
+    for (const fromPath of fromPaths) {
+      const name = fromPath.split('/').pop();
+      const newPath = toDir ? `${toDir}/${name}` : name;
+      if (newPath === fromPath) continue;
+      try {
+        const res = await fetch(`/api/projects/${this.project.id}/fs/rename`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ oldPath: fromPath, newPath }),
+        });
+        if (res.ok) {
+          const affectedFiles = this._openFiles.filter(f => f.path === fromPath || f.path.startsWith(fromPath + '/'));
+          affectedFiles.forEach(f => this._confirmClose(f.path));
+          const affectedImages = this._openImages.filter(p => p === fromPath || p.startsWith(fromPath + '/'));
+          affectedImages.forEach(p => this._closeImage(p));
+        }
+      } catch (e) {
+        console.error('Failed to move', fromPath, e);
       }
-    } catch (e) {
-      console.error('Failed to move', e);
     }
+    await this._loadFileTree();
+    this._loadChanges();
   }
 
   _getFlatFilePaths(nodes = this._fileTree ?? [], parentPath = '') {
@@ -2793,7 +2800,8 @@ class LoopProjectScreen extends LitElement {
       if (node.type === 'dir') {
         const open = this._expandedDirs.has(nodePath);
         const isDropTarget = this._dropTargetDir === nodePath;
-        const isDragging = this._draggingPath === nodePath;
+        const isDragging = this._draggingPath === nodePath ||
+          (this._draggingPath && this._selectedFiles.has(this._draggingPath) && this._selectedFiles.has(nodePath));
         return html`
           <div class="tree-node ${isDropTarget ? 'drop-target' : ''} ${isDragging ? 'dragging' : ''}" style="padding-left:${12 + indent}px"
             draggable="true"
@@ -2817,7 +2825,8 @@ class LoopProjectScreen extends LitElement {
         `;
       } else {
         const isSelected = this._selectedFiles.has(nodePath);
-        const isDragging = this._draggingPath === nodePath;
+        const isDragging = this._draggingPath === nodePath ||
+          (this._draggingPath && this._selectedFiles.has(this._draggingPath) && this._selectedFiles.has(nodePath));
         return html`
           <div
             class="tree-node ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}"
