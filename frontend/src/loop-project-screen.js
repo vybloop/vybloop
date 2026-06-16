@@ -1397,11 +1397,11 @@ class LoopProjectScreen extends LitElement {
     };
     document.addEventListener('visibilitychange', this._visibilityHandler);
     this._searchKeyHandler = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'f') {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         this._focusSearch();
       }
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 's') {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
         if (this._isFilePath(this._activeTab)) {
           e.preventDefault();
           this._saveFile(this._activeTab);
