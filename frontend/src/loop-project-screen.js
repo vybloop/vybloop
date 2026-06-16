@@ -1721,7 +1721,7 @@ class LoopProjectScreen extends LitElement {
     const internalPath = e.dataTransfer.getData('text/x-loop-filepath');
     if (internalPath) {
       const pathsToMove = this._selectedFiles.has(internalPath) && this._selectedFiles.size > 1
-        ? [...this._selectedFiles]
+        ? this._filterTopLevelPaths([...this._selectedFiles])
         : [internalPath];
       this._moveItems(pathsToMove, dir ?? '');
       return;
@@ -1756,20 +1756,23 @@ class LoopProjectScreen extends LitElement {
     this._loadChanges();
   }
 
-  _getFlatFilePaths(nodes = this._fileTree ?? [], parentPath = '') {
+  _getFlatPaths(nodes = this._fileTree ?? [], parentPath = '') {
     const result = [];
     for (const node of nodes) {
       const nodePath = parentPath ? `${parentPath}/${node.name}` : node.name;
-      if (node.type === 'file') {
-        result.push(nodePath);
-      } else if (node.type === 'dir' && this._expandedDirs.has(nodePath) && node.children) {
-        result.push(...this._getFlatFilePaths(node.children, nodePath));
+      result.push(nodePath);
+      if (node.type === 'dir' && this._expandedDirs.has(nodePath) && node.children) {
+        result.push(...this._getFlatPaths(node.children, nodePath));
       }
     }
     return result;
   }
 
-  _handleFileClick(e, nodePath) {
+  _filterTopLevelPaths(paths) {
+    return paths.filter(p => !paths.some(other => other !== p && p.startsWith(other + '/')));
+  }
+
+  _handleNodeClick(e, nodePath, isDir = false) {
     if (e.ctrlKey || e.metaKey) {
       const next = new Set(this._selectedFiles);
       if (next.has(nodePath)) next.delete(nodePath);
@@ -1777,7 +1780,7 @@ class LoopProjectScreen extends LitElement {
       this._selectedFiles = next;
       this._lastSelectedFile = nodePath;
     } else if (e.shiftKey && this._lastSelectedFile) {
-      const flatPaths = this._getFlatFilePaths();
+      const flatPaths = this._getFlatPaths();
       const lastIdx = flatPaths.indexOf(this._lastSelectedFile);
       const currIdx = flatPaths.indexOf(nodePath);
       if (lastIdx >= 0 && currIdx >= 0) {
@@ -1789,7 +1792,7 @@ class LoopProjectScreen extends LitElement {
     } else {
       this._selectedFiles = new Set([nodePath]);
       this._lastSelectedFile = nodePath;
-      this._openFile(nodePath);
+      if (!isDir) this._openFile(nodePath);
     }
   }
 
@@ -2800,10 +2803,11 @@ class LoopProjectScreen extends LitElement {
       if (node.type === 'dir') {
         const open = this._expandedDirs.has(nodePath);
         const isDropTarget = this._dropTargetDir === nodePath;
+        const isSelected = this._selectedFiles.has(nodePath);
         const isDragging = this._draggingPath === nodePath ||
           (this._draggingPath && this._selectedFiles.has(this._draggingPath) && this._selectedFiles.has(nodePath));
         return html`
-          <div class="tree-node ${isDropTarget ? 'drop-target' : ''} ${isDragging ? 'dragging' : ''}" style="padding-left:${12 + indent}px"
+          <div class="tree-node ${isDropTarget ? 'drop-target' : ''} ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}" style="padding-left:${12 + indent}px"
             draggable="true"
             @dragstart=${(e) => { this._draggingPath = nodePath; e.dataTransfer.setData('text/x-loop-filepath', nodePath); e.dataTransfer.effectAllowed = 'move'; }}
             @dragend=${() => { this._draggingPath = null; this._dropTargetDir = null; }}
@@ -2811,7 +2815,11 @@ class LoopProjectScreen extends LitElement {
             @drop=${(e) => this._onTreeDrop(e)}
             @contextmenu=${(e) => this._showContextMenu(e, nodePath, true)}
           >
-            <button class="tree-dir-toggle" @click=${(e) => { e.stopPropagation(); this._toggleDir(nodePath); }}>
+            <button class="tree-dir-toggle" @click=${(e) => {
+              e.stopPropagation();
+              this._handleNodeClick(e, nodePath, true);
+              if (!e.ctrlKey && !e.metaKey && !e.shiftKey) this._toggleDir(nodePath);
+            }}>
               <svg class="tree-dir-chevron ${open ? 'open' : ''}" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m9 6 6 6-6 6"/>
               </svg>
@@ -2834,7 +2842,7 @@ class LoopProjectScreen extends LitElement {
             draggable="true"
             @dragstart=${(e) => { this._draggingPath = nodePath; e.dataTransfer.setData('text/x-loop-filepath', nodePath); e.dataTransfer.effectAllowed = 'move'; }}
             @dragend=${() => { this._draggingPath = null; this._dropTargetDir = null; }}
-            @click=${(e) => this._handleFileClick(e, nodePath)}
+            @click=${(e) => this._handleNodeClick(e, nodePath)}
             @contextmenu=${(e) => this._showContextMenu(e, nodePath, false)}
           >
             <svg class="tree-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
