@@ -13,6 +13,7 @@ import {
   getProjects,
   getProject,
   createProject,
+  deleteProject,
   cloneRepo,
   initProject,
   getChanges,
@@ -40,7 +41,7 @@ import {
   searchFiles,
 } from './data.js';
 import { listTemplates } from './templates.js';
-import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale } from './file-watcher.js';
+import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
 import { startBuildCapture, startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
 
@@ -112,6 +113,26 @@ app.get('/api/projects/:id', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
   res.json(project);
+});
+
+app.delete('/api/projects/:id', async (req, res) => {
+  const id = req.params.id;
+  const project = await getProject(id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+
+  // Tear down everything live for this project before removing its files, so we
+  // don't leave orphaned containers, watchers, or log tails behind.
+  await destroyProjectSessions(id);
+  stopLogCapture(id);
+  destroyWatcher(id);
+  notifyProjectStopped(id);
+  if (project.hasCompose && project.status === 'running') {
+    await composeDown(id, `/data/${id}/git`).catch(() => {});
+  }
+
+  const result = deleteProject(id);
+  if (!result) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
 });
 
 app.get('/api/projects/:id/changes', async (req, res) => {
@@ -604,6 +625,17 @@ async function destroyAllSessions() {
   const all = [...sessions.values()];
   sessions.clear();
   await Promise.all(all.map(s => s.destroy().catch(() => {})));
+}
+
+// Destroy just the sessions belonging to one project (agent/shell/logs). The
+// `${projectId}:` prefix (with the colon) ensures e.g. "miner" doesn't match
+// "miner-4:agent".
+async function destroyProjectSessions(projectId) {
+  const matches = [...sessions.entries()].filter(([key]) => key.startsWith(`${projectId}:`));
+  for (const [key, session] of matches) {
+    sessions.delete(key);
+    await session.destroy().catch(() => {});
+  }
 }
 
 const INNER_CONTAINER_DIR = join(__dirname, '../inner-container');

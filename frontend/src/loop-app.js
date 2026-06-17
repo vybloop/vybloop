@@ -51,6 +51,10 @@ class LoopApp extends LitElement {
       this._projects = [...this._projects, e.detail.project];
       this._navigate('project', e.detail.project.id);
     });
+    this.addEventListener('project-deleted', (e) => {
+      this._projects = this._projects.filter(p => p.id !== e.detail.id);
+      this._navigate('home', null);
+    });
   }
 
   disconnectedCallback() {

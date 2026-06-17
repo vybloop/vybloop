@@ -469,6 +469,25 @@ export function createProject(data) {
   return { ...project, status: 'idle', changes: 0 };
 }
 
+// Remove a project: drop it from the list and delete its data directory
+// (repo + git working tree). Live sessions/compose/watchers are torn down by
+// the caller in server.js before this runs. Returns null if no such project.
+export function deleteProject(id) {
+  const idx = projects.findIndex(p => p.id === id);
+  if (idx === -1) return null;
+  projects.splice(idx, 1);
+  delete projectStatus[id];
+  delete projectErrors[id];
+  persist();
+  try {
+    rmSync(`/data/${id}`, { recursive: true, force: true });
+  } catch (err) {
+    console.error(`[delete] ${id}: failed to remove data dir: ${err.message}`);
+  }
+  console.log(`[delete] ${id}: removed`);
+  return { ok: true };
+}
+
 export async function getChanges(id) {
   const p = projects.find(p => p.id === id);
   if (!p) return null;

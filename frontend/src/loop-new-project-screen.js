@@ -437,6 +437,9 @@ class LoopNewProjectScreen extends LitElement {
         if (project.status === 'error') {
           this._error = project.statusError || 'Failed to clone the repository. Check the server logs.';
           this._step = 'form';
+          // Remove the half-created project so it doesn't linger in a broken
+          // state and the user can retry with the same name.
+          await this._deleteFailedProject(project.id);
           return;
         }
       }
@@ -452,6 +455,16 @@ class LoopNewProjectScreen extends LitElement {
     } finally {
       this._submitting = false;
       this._cloning = false;
+    }
+  }
+
+  // Best-effort cleanup of a project whose clone failed, so we never leave a
+  // half-created project behind (and the user can retry with the same name).
+  async _deleteFailedProject(id) {
+    try {
+      await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+    } catch {
+      // Nothing actionable if cleanup fails; the error is already shown.
     }
   }
 

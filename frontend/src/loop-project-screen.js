@@ -1114,6 +1114,18 @@ class LoopProjectScreen extends LitElement {
       border-color: oklch(0.72 0.18 25 / 0.3);
     }
     .dialog-btn-danger:hover { background: oklch(0.72 0.18 25 / 0.25); }
+    .dialog-warning {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: oklch(0.72 0.18 25 / 0.1);
+      border: 1px solid oklch(0.72 0.18 25 / 0.25);
+      color: var(--del);
+      font-size: 12px;
+      line-height: 1.5;
+    }
 
     /* Narrow / mobile layout */
     @media (max-width: 768px) {

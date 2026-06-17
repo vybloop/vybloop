@@ -87,6 +87,22 @@ export function getOrCreateWatcher(projectId) {
   return watchers.get(projectId);
 }
 
+// Tear down a project's watcher and close any open SSE connections. Used when
+// a project is deleted so chokidar stops watching the now-removed directory.
+export function destroyWatcher(projectId) {
+  const watcher = watchers.get(projectId);
+  if (watcher) {
+    watcher._stop();
+    for (const res of watcher.clients) {
+      try { res.end(); } catch {}
+    }
+    watcher.clients.clear();
+    watchers.delete(projectId);
+  }
+  runStartTimes.delete(projectId);
+  staleProjects.delete(projectId);
+}
+
 export function broadcastStatus(projectId, status, detail = null) {
   const watcher = watchers.get(projectId);
   if (!watcher) return;

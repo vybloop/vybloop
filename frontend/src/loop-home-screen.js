@@ -1,7 +1,8 @@
 import { LitElement, html, css } from 'lit';
 import './loop-top-bar.js';
 import {
-  iconPlus, iconSearch, iconGrid, iconList, iconGit, iconBranch, iconChevron
+  iconPlus, iconSearch, iconGrid, iconList, iconGit, iconBranch, iconChevron,
+  iconMore, iconTrash
 } from './icons.js';
 
 const _isMac = /Macintosh|MacIntel/.test(navigator.userAgent);
@@ -13,6 +14,9 @@ class LoopHomeScreen extends LitElement {
     projects: { type: Array },
     _search: { state: true },
     _viewMode: { state: true },
+    _menuFor: { state: true },
+    _dialog: { state: true },
+    _deleting: { state: true },
   };
 
   static styles = css`
@@ -359,6 +363,136 @@ class LoopHomeScreen extends LitElement {
       color: var(--fg-3);
       font-size: 14px;
     }
+
+    /* "..." menu */
+    .menu-wrap {
+      position: relative;
+      flex-shrink: 0;
+    }
+    .menu-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      border: none;
+      background: transparent;
+      color: var(--fg-3);
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .menu-btn:hover { background: var(--bg-3); color: var(--fg-1); }
+    .menu-btn.active { background: var(--bg-3); color: var(--fg-1); }
+    .table-menu-cell { width: 40px; text-align: right; }
+    .ctx-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      padding: 4px;
+      min-width: 160px;
+      z-index: 50;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+    .ctx-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      text-align: left;
+      padding: 6px 10px;
+      border: none;
+      background: transparent;
+      color: var(--fg-1);
+      font-size: 13px;
+      font-family: var(--font-sans);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .ctx-menu-item:hover { background: var(--bg-3); }
+    .ctx-menu-item.danger { color: var(--del); }
+    .ctx-menu-item.danger svg { width: 14px; height: 14px; }
+
+    /* Delete dialog */
+    .dialog-overlay {
+      position: fixed;
+      inset: 0;
+      background: oklch(0 0 0 / 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+    .dialog-box {
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px;
+      width: 360px;
+      max-width: calc(100vw - 32px);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 8px 32px oklch(0 0 0 / 0.4);
+    }
+    .dialog-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--fg-0);
+    }
+    .dialog-body {
+      font-size: 13px;
+      color: var(--fg-2);
+      line-height: 1.5;
+    }
+    .dialog-body strong { color: var(--fg-1); }
+    .dialog-warning {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: oklch(0.72 0.18 25 / 0.1);
+      border: 1px solid oklch(0.72 0.18 25 / 0.25);
+      color: var(--del);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .dialog-error {
+      font-size: 11px;
+      color: var(--del);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .dialog-btn {
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      border: 1px solid var(--line-soft);
+      background: var(--bg-2);
+      color: var(--fg-1);
+      transition: background 0.1s;
+    }
+    .dialog-btn:hover { background: var(--bg-3); }
+    .dialog-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .dialog-btn-danger {
+      background: oklch(0.72 0.18 25 / 0.15);
+      color: var(--del);
+      border-color: oklch(0.72 0.18 25 / 0.3);
+    }
+    .dialog-btn-danger:hover:not(:disabled) { background: oklch(0.72 0.18 25 / 0.25); }
   `;
 
   constructor() {
@@ -366,16 +500,23 @@ class LoopHomeScreen extends LitElement {
     this.projects = [];
     this._search = '';
     this._viewMode = 'grid';
+    this._menuFor = null;   // project id whose "..." menu is open
+    this._dialog = null;    // null | { type: 'delete-project', project, error }
+    this._deleting = false;
+    this._boundKeydown = this._handleKeydown.bind(this);
+    this._boundCloseMenu = () => { if (this._menuFor) this._menuFor = null; };
   }
 
   connectedCallback() {
     super.connectedCallback();
-    document.addEventListener('keydown', this._handleKeydown.bind(this));
+    document.addEventListener('keydown', this._boundKeydown);
+    document.addEventListener('click', this._boundCloseMenu);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    document.removeEventListener('keydown', this._handleKeydown.bind(this));
+    document.removeEventListener('keydown', this._boundKeydown);
+    document.removeEventListener('click', this._boundCloseMenu);
   }
 
   _handleKeydown(e) {
@@ -423,6 +564,100 @@ class LoopHomeScreen extends LitElement {
     }));
   }
 
+  _toggleMenu(e, id) {
+    e.stopPropagation();
+    this._menuFor = this._menuFor === id ? null : id;
+  }
+
+  _openDeleteDialog(e, project) {
+    e.stopPropagation();
+    this._menuFor = null;
+    const reasons = [];
+    if (project.changes > 0) {
+      reasons.push(`has ${project.changes} uncommitted change${project.changes === 1 ? '' : 's'}`);
+    }
+    this._dialog = { type: 'delete-project', project, reasons };
+  }
+
+  async _deleteProject() {
+    const project = this._dialog?.project;
+    if (!project || this._deleting) return;
+    this._deleting = true;
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to delete project');
+      }
+      this._dialog = null;
+      this.dispatchEvent(new CustomEvent('project-deleted', {
+        detail: { id: project.id },
+        bubbles: true,
+        composed: true,
+      }));
+    } catch (e) {
+      console.error('Failed to delete project', e);
+      this._dialog = { ...this._dialog, error: e.message };
+    } finally {
+      this._deleting = false;
+    }
+  }
+
+  _renderMenu(p) {
+    return html`
+      <div class="menu-wrap" @click=${e => e.stopPropagation()}>
+        <button
+          class="menu-btn ${this._menuFor === p.id ? 'active' : ''}"
+          title="More actions"
+          @click=${e => this._toggleMenu(e, p.id)}
+        >${iconMore}</button>
+        ${this._menuFor === p.id ? html`
+          <div class="ctx-menu">
+            <button class="ctx-menu-item danger" @click=${e => this._openDeleteDialog(e, p)}>
+              ${iconTrash}
+              Delete project
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  _renderDeleteDialog() {
+    const d = this._dialog;
+    if (!d || d.type !== 'delete-project') return '';
+    const name = d.project?.name || 'this project';
+    const hasWarning = d.reasons && d.reasons.length > 0;
+    return html`
+      <div class="dialog-overlay" @click=${() => { if (!this._deleting) this._dialog = null; }}>
+        <div class="dialog-box" @click=${e => e.stopPropagation()}>
+          <div class="dialog-title">Delete project</div>
+          <div class="dialog-body">
+            Delete <strong>${name}</strong>? This permanently removes the project and its files from the server.
+            ${hasWarning ? html`
+              <div class="dialog-warning">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px">
+                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                <div>
+                  This project ${d.reasons.join(' and ')}. Deleting it will permanently lose that work — it cannot be recovered.
+                </div>
+              </div>
+            ` : ''}
+          </div>
+          ${d.error ? html`<div class="dialog-error">${d.error}</div>` : ''}
+          <div class="dialog-actions">
+            <button class="dialog-btn" @click=${() => this._dialog = null} ?disabled=${this._deleting}>Cancel</button>
+            <button class="dialog-btn dialog-btn-danger" @click=${this._deleteProject} ?disabled=${this._deleting}>
+              ${this._deleting ? 'Deleting…' : 'Delete project'}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _renderStatusPill(status) {
     if (status === 'running') {
       return html`<span class="status-pill running"><span class="pulse-dot"></span>running</span>`;
@@ -439,7 +674,10 @@ class LoopHomeScreen extends LitElement {
           <div>
             <div class="card-glyph">${this._glyph(p.name)}</div>
           </div>
-          ${this._renderStatusPill(p.status)}
+          <div style="display:flex;align-items:center;gap:4px">
+            ${this._renderStatusPill(p.status)}
+            ${this._renderMenu(p)}
+          </div>
         </div>
         <div>
           <div class="card-name">${p.name}</div>
@@ -483,6 +721,7 @@ class LoopHomeScreen extends LitElement {
             <th>Status</th>
             <th>Changes</th>
             <th>Last activity</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -506,6 +745,7 @@ class LoopHomeScreen extends LitElement {
               <td>${this._renderStatusPill(p.status)}</td>
               <td>${p.changes > 0 ? html`<span class="changes-badge">${p.changes} changes</span>` : html`<span style="color:var(--fg-3)">—</span>`}</td>
               <td style="color:var(--fg-3)">${this._relativeTime(p.lastActivity)}</td>
+              <td class="table-menu-cell">${this._renderMenu(p)}</td>
             </tr>
           `)}
         </tbody>
@@ -561,6 +801,7 @@ class LoopHomeScreen extends LitElement {
           : this._viewMode === 'grid' ? this._renderGrid(filtered) : this._renderList(filtered)
         }
       </div>
+      ${this._renderDeleteDialog()}
     `;
   }
 }
