@@ -1,2 +1,4 @@
 podman-web/claude-config/
 podman-web/project/
+# Never bake the GitHub App private key into the image; it's mounted at runtime.
+*.pem

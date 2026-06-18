@@ -610,8 +610,9 @@ class LoopNewProjectScreen extends LitElement {
       </button>
       <div class="form-title">Create GitHub repository?</div>
       <div class="form-subtitle">
-        A GitHub token was found for
-        <span class="github-username">@${this._githubInfo?.username}</span>.
+        ${this._githubInfo?.owner
+          ? html`A new repository can be created under <span class="github-username">@${this._githubInfo.owner}</span>.`
+          : html`GitHub access is configured.`}
         Would you like to create a new repository for this project?
       </div>
 

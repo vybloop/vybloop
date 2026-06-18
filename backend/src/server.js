@@ -27,7 +27,6 @@ import {
   syncProject,
   getConfig,
   updateConfig,
-  getGithubPatStatus,
   setGithubPat,
   getFileTree,
   getFileContent,
@@ -43,6 +42,8 @@ import {
 import { listTemplates } from './templates.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
+import { startCredentialBroker } from './git-credential-broker.js';
+import { getGithubStatus, createRepo } from './git-auth.js';
 import { startBuildCapture, startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
 
 const execFileAsync = promisify(execFile);
@@ -104,8 +105,15 @@ app.post('/api/projects', (req, res) => {
   if (!name) return res.status(400).json({ error: 'name is required' });
   const project = createProject({ name, repo, branch, template });
   if (project.error) return res.status(409).json({ error: project.error });
-  if (repo) cloneRepo(project.id, repo);
-  else initProject(project.id, project.template);
+  if (repo) {
+    cloneRepo(project.id, repo);
+    // cloneRepo runs in the background and sets the live status to 'cloning';
+    // reflect that in the response so the client waits for the clone to finish
+    // (and surfaces any failure) rather than navigating to a not-yet-cloned repo.
+    project.status = 'cloning';
+  } else {
+    initProject(project.id, project.template);
+  }
   res.status(201).json(project);
 });
 
@@ -450,39 +458,27 @@ app.get('/api/templates', (req, res) => {
   res.json(listTemplates());
 });
 
+// Whether the new-project flow can offer to create a repo (and how).
 app.get('/api/github/status', async (req, res) => {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) return res.json({ available: false });
   try {
-    const resp = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'loop-app' },
-    });
-    if (!resp.ok) return res.json({ available: false });
-    const user = await resp.json();
-    res.json({ available: true, username: user.login });
+    const status = await getGithubStatus();
+    // owner: the account a new repo would be created under (org in app mode).
+    const owner = status.mode === 'app'
+      ? status.installations.find(i => i.canCreateRepos)?.account
+      : undefined;
+    res.json({ available: status.canCreateRepos, mode: status.mode, owner });
   } catch {
     res.json({ available: false });
   }
 });
 
 app.post('/api/github/repos', async (req, res) => {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) return res.status(400).json({ error: 'No GitHub token configured' });
   const { name, private: isPrivate = false } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
-    const resp = await fetch('https://api.github.com/user/repos', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'loop-app',
-      },
-      body: JSON.stringify({ name, private: isPrivate, auto_init: true }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) return res.status(resp.status).json({ error: data.message || 'Failed to create repository' });
-    res.json({ url: data.clone_url, htmlUrl: data.html_url });
+    const result = await createRepo({ name, isPrivate });
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -497,15 +493,18 @@ app.patch('/api/config', (req, res) => {
   res.json(result);
 });
 
-app.get('/api/config/github-pat', (req, res) => {
-  res.json(getGithubPatStatus());
+// GitHub auth status for the settings UI: GitHub App ("app") mode with its
+// installations, or PAT fallback ("pat"/"none") mode.
+app.get('/api/config/github', async (req, res) => {
+  res.json(await getGithubStatus());
 });
 
-app.post('/api/config/github-pat', (req, res) => {
+// Set the PAT (only meaningful in PAT/none mode; ignored when a GitHub App is configured).
+app.post('/api/config/github/pat', async (req, res) => {
   const { pat } = req.body;
   if (typeof pat !== 'string') return res.status(400).json({ error: 'pat must be a string' });
   setGithubPat(pat);
-  res.json(getGithubPatStatus());
+  res.json(await getGithubStatus());
 });
 
 app.get('/api/projects/:id/logs', async (req, res) => {
@@ -565,6 +564,7 @@ const SESSION_COMMANDS = {
     '-v', `${repoPath}:/project`,
     '-v', '/claudeconfig:/claudeconfig',
     '--env', 'CLAUDE_CONFIG_DIR=/claudeconfig',
+    '--env', 'GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig',
     '--env', 'ANTHROPIC_API_KEY',
     '--env', 'IS_SANDBOX=1',
     '--env', 'COLORTERM=truecolor',
@@ -582,6 +582,8 @@ const SESSION_COMMANDS = {
   shell: (repoPath) => [
     'podman', 'run', '--rm', '-it',
     '-v', `${repoPath}:/project`,
+    '-v', '/claudeconfig:/claudeconfig',
+    '--env', 'GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig',
     '-w', '/project',
     'claude-inner',
     'bash',
@@ -749,6 +751,8 @@ startIpcServer((msg) => {
     broadcastAgentDone(msg.projectId);
   }
 });
+
+startCredentialBroker();
 
 const PORT = process.env.PORT || 9876;
 server.listen(PORT, () => {

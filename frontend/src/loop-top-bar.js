@@ -5,7 +5,7 @@ class LoopTopBar extends LitElement {
   static properties = {
     _configOpen: { state: true },
     _config: { state: true },
-    _patStatus: { state: true },
+    _github: { state: true },
     _menuOpen: { state: true },
     _sandboxBusy: { state: true },
   };
@@ -211,13 +211,39 @@ class LoopTopBar extends LitElement {
       background: var(--bg-3);
       color: var(--fg-0);
     }
+    .gh-account {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--fg-1);
+      padding: 4px 0;
+    }
+    .gh-account + .gh-account { border-top: 1px solid var(--line-soft); }
+    .gh-link {
+      display: inline-block;
+      font-size: 12px;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .gh-link:hover { text-decoration: underline; }
+    .gh-link.button {
+      margin-top: 4px;
+      padding: 5px 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      color: var(--fg-0);
+      text-align: center;
+    }
+    .gh-link.button:hover { background: var(--bg-3); text-decoration: none; }
   `;
 
   constructor() {
     super();
     this._configOpen = false;
     this._config = { terminalMode: 'direct', gitName: '', gitEmail: '', portRange: '22000-23000' };
-    this._patStatus = { configured: false, fromEnv: false };
+    this._github = { mode: 'none', installations: [], pat: { configured: false, fromEnv: false } };
     this._menuOpen = false;
     this._sandboxBusy = '';
     this._loadConfig();
@@ -241,12 +267,12 @@ class LoopTopBar extends LitElement {
 
   async _loadConfig() {
     try {
-      const [configRes, patRes] = await Promise.all([
+      const [configRes, githubRes] = await Promise.all([
         fetch('/api/config'),
-        fetch('/api/config/github-pat'),
+        fetch('/api/config/github'),
       ]);
       if (configRes.ok) this._config = await configRes.json();
-      if (patRes.ok) this._patStatus = await patRes.json();
+      if (githubRes.ok) this._github = await githubRes.json();
     } catch {}
   }
 
@@ -284,13 +310,13 @@ class LoopTopBar extends LitElement {
     const val = e.target.value;
     if (!val) return;
     try {
-      const res = await fetch('/api/config/github-pat', {
+      const res = await fetch('/api/config/github/pat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pat: val }),
       });
       if (res.ok) {
-        this._patStatus = await res.json();
+        this._github = await res.json();
         e.target.value = '';
       }
     } catch {}
@@ -321,6 +347,48 @@ class LoopTopBar extends LitElement {
     } finally {
       this._sandboxBusy = '';
     }
+  }
+
+  _renderGithub() {
+    const gh = this._github;
+    if (gh.mode === 'app') {
+      return html`
+        <div class="config-row">
+          <div class="config-label">GitHub App — ${gh.slug}</div>
+          ${gh.error ? html`<div class="config-hint">Could not reach GitHub: ${gh.error}</div>` : ''}
+          ${gh.installations?.length ? gh.installations.map(inst => html`
+            <div class="gh-account">
+              <span>${inst.account}</span>
+              <a class="gh-link" href=${inst.manageUrl} target="_blank" rel="noopener">Manage repos</a>
+            </div>
+          `) : html`<div class="config-hint">Not installed on any account yet.</div>`}
+          <a class="gh-link button" href=${gh.installUrl} target="_blank" rel="noopener">
+            ${gh.installations?.length ? 'Add / configure repositories' : 'Install on GitHub'}
+          </a>
+        </div>
+      `;
+    }
+    // PAT / none mode
+    const fromEnv = gh.pat?.fromEnv;
+    const configured = gh.pat?.configured;
+    return html`
+      <div class="config-row">
+        <div class="config-label">GitHub PAT</div>
+        <input
+          class="config-input"
+          type="password"
+          ?disabled=${fromEnv}
+          placeholder=${fromEnv ? 'Set via environment variable' : configured ? 'Set — enter new value to replace' : 'ghp_…'}
+          @blur=${this._onPatBlur}
+          @keydown=${e => e.key === 'Enter' && e.target.blur()}
+        />
+        ${fromEnv ? html`
+          <div class="config-hint">Token is provided by the <code>GITHUB_TOKEN</code> environment variable.</div>
+        ` : html`
+          <div class="config-hint">Configure a GitHub App (<code>GITHUB_APP_ID</code> + private key) to grant repo access by installing the app instead.</div>
+        `}
+      </div>
+    `;
   }
 
   render() {
@@ -414,20 +482,7 @@ class LoopTopBar extends LitElement {
                   />
                 </div>
                 <hr class="config-divider" />
-                <div class="config-row">
-                  <div class="config-label">GitHub PAT</div>
-                  <input
-                    class="config-input"
-                    type="password"
-                    ?disabled=${this._patStatus.fromEnv}
-                    placeholder=${this._patStatus.fromEnv ? 'Set via environment variable' : this._patStatus.configured ? 'Set — enter new value to replace' : 'ghp_…'}
-                    @blur=${this._onPatBlur}
-                    @keydown=${e => e.key === 'Enter' && e.target.blur()}
-                  />
-                  ${this._patStatus.fromEnv ? html`
-                    <div class="config-hint">Token is provided by the <code>GITHUB_TOKEN</code> environment variable.</div>
-                  ` : ''}
-                </div>
+                ${this._renderGithub()}
               </div>
             ` : ''}
           </div>

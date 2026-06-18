@@ -10,10 +10,17 @@ services:
     environment:
       - ANTHROPIC_API_KEY
       - PORT
+      - GITHUB_APP_ID
+      - GITHUB_APP_SLUG
+      - GITHUB_APP_PRIVATE_KEY_PATH
+      - GITHUB_TOKEN
     volumes:
       - ./data:/data
       - podman_storage:/home/poduser/.local/share/containers
       - claude_config:/claudeconfig
+      # GitHub App private key, read-only. Remove this line if running in
+      # PAT-only mode without a .pem present.
+      - ./vybloop.private-key.pem:/secrets/vybloop.pem:ro
 
 volumes:
   podman_storage:

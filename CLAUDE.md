@@ -75,6 +75,7 @@ podman run --rm -it \
   -v <repoPath>:/project \
   -v /claudeconfig:/claudeconfig \
   --env CLAUDE_CONFIG_DIR=/claudeconfig \
+  --env GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig \
   --env ANTHROPIC_API_KEY \
   --env IS_SANDBOX=1 \
   --env COLORTERM=truecolor \
@@ -83,7 +84,7 @@ podman run --rm -it \
   claude-inner claude --dangerously-skip-permissions
 ```
 
-The `shell` session type runs `bash` in the same container (without the claudeconfig mount).
+The `shell` session type runs `bash` in the same container. It also mounts `/claudeconfig` and sets `GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig` so the git credential helper works there (see GitHub auth below).
 
 Sessions are keyed by `projectId:type` and reused across reconnects while alive.
 
@@ -98,6 +99,17 @@ A Unix domain socket at `/claudeconfig/loop-events.sock` lets inner containers n
 **Adding new events**: Send a new `event` value from the hook (or any process with access to `/claudeconfig/`), handle it in the `startIpcServer` callback in `server.js`, and broadcast via the SSE helpers in `file-watcher.js`.
 
 **SSE propagation**: `broadcastAgentDone(projectId)` in `file-watcher.js` sends an `agent-done` SSE event to all connected frontend clients for that project. The frontend listens in `_connectSse()` in `loop-project-screen.js`.
+
+### GitHub authentication — `backend/src/git-auth.js` + `backend/src/git-credential-broker.js`
+
+Two modes, chosen automatically:
+
+- **GitHub App mode** ("VybLoop") — active when `GITHUB_APP_ID` is set and the private key is readable (`GITHUB_APP_PRIVATE_KEY_PATH`, default `/secrets/vybloop.pem`, mounted read-only via `docker-compose.yml`; the pem lives at the repo root, git-ignored). `git-auth.js` signs an RS256 JWT (built-in `crypto`, no dep), lists installations, and mints short-lived **installation access tokens** (cached, refreshed when <5 min remain). Users grant repo access by *installing the app on GitHub*, not by pasting a token.
+- **PAT mode** (fallback) — when no App is configured, uses `GITHUB_TOKEN` (env) or the value set via the settings UI (persisted as `config.githubPat`).
+
+**Credential delivery**: Because installation tokens expire (~1h), nothing is baked into the clone URL (the old PAT behaviour via `injectGithubToken` is gone — clones use clean URLs). Instead a **git credential helper** mints a fresh credential per git op. `git-credential-broker.js` writes the helper script `loop-git-credential.js` and a shared `gitconfig` (`credential.helper` + `credential.useHttpPath=true`) into `/claudeconfig`, and listens on `/claudeconfig/loop-git-credential.sock`. Both the backend process and the inner containers set `GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig`, so backend pushes/fetches and in-container agent git all authenticate identically. The helper derives the repo owner from the request path and asks the broker, which returns `getCredentialForOwner(owner)`.
+
+**Endpoints**: `GET /api/config/github` (status: mode, installations, install URL, PAT state) and `POST /api/config/github/pat` (set PAT). `GET /api/github/status` + `POST /api/github/repos` back the new-project "create a repo" flow (org repos via an installation with Administration access in App mode; `/user/repos` in PAT mode).
 
 ### Project run/stop (compose)
 

@@ -5,3 +5,5 @@ data/
 tasha/
 .env
 frontend/dist/
+# GitHub App private key — secret, mounted into the container (never committed)
+*.pem

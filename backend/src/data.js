@@ -3,6 +3,14 @@ import { fileURLToPath } from 'url';
 import { dirname, join, resolve, normalize, basename, relative } from 'path';
 import { spawn, execFile } from 'child_process';
 import { getTemplateClaudeMd } from './templates.js';
+import { setStoredPat } from './git-auth.js';
+
+// Route every git invocation (clone, push/fetch, identity) through the shared
+// global config in /claudeconfig, which carries the credential helper (see
+// git-credential-broker.js) and the user identity. Inner containers point at the
+// same file via GIT_CONFIG_GLOBAL, so credentials work identically everywhere.
+// Must be set before any `git` runs (e.g. applyGitAuthor on module load).
+process.env.GIT_CONFIG_GLOBAL = '/claudeconfig/gitconfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,6 +41,9 @@ function save(db) {
 const db = load();
 let projects = db.projects.map(({ status, ...p }) => p);
 let config = db.config;
+
+// Make the persisted PAT available to git-auth's fallback ("PAT mode").
+setStoredPat(config.githubPat);
 
 const projectStatus = {};
 for (const p of projects) {
@@ -308,30 +319,17 @@ export async function syncProject(id) {
   return { ok: true };
 }
 
-function injectGithubToken(repoUrl) {
-  const token = process.env.GITHUB_TOKEN || config.githubPat;
-  if (!token) return repoUrl;
-  try {
-    const u = new URL(repoUrl);
-    if (u.hostname === 'github.com' && u.protocol === 'https:') {
-      u.username = token;
-      return u.toString();
-    }
-  } catch {}
-  return repoUrl;
-}
-
 export function cloneRepo(id, repoUrl) {
-  const cloneUrl = injectGithubToken(repoUrl);
   const dataDir = `/data/${id}`;
   const destDir = gitDir(id);
   mkdirSync(dataDir, { recursive: true });
   projectStatus[id] = 'cloning';
   delete projectErrors[id];
-  // Log the original URL, never cloneUrl — the latter may embed a GitHub token.
+  // Clone the clean URL; credentials are supplied on demand by the git
+  // credential helper (git-credential-broker.js) so no token is baked in.
   console.log(`[clone] ${id}: cloning ${repoUrl} -> ${destDir}`);
 
-  const proc = spawn('git', ['clone', cloneUrl, destDir]);
+  const proc = spawn('git', ['clone', repoUrl, destDir]);
 
   // Capture git's progress/error output so a failed clone isn't silent.
   let stderr = '';
@@ -642,15 +640,9 @@ export function updateConfig(updates) {
   return getConfig();
 }
 
-export function getGithubPatStatus() {
-  return {
-    configured: !!(process.env.GITHUB_TOKEN || config.githubPat),
-    fromEnv: !!process.env.GITHUB_TOKEN,
-  };
-}
-
 export function setGithubPat(pat) {
   config.githubPat = pat || '';
+  setStoredPat(config.githubPat);
   persist();
 }
 
