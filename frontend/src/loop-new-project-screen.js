@@ -17,6 +17,8 @@ class LoopNewProjectScreen extends LitElement {
     _error: { state: true },
     _step: { state: true },
     _githubInfo: { state: true },
+    _githubOwners: { state: true },
+    _githubOwner: { state: true },
     _githubRepoName: { state: true },
     _githubPrivate: { state: true },
     _githubCreating: { state: true },
@@ -84,7 +86,7 @@ class LoopNewProjectScreen extends LitElement {
       font-weight: 400;
       margin-left: 4px;
     }
-    input[type="text"], input[type="url"], textarea {
+    input[type="text"], input[type="url"], textarea, select {
       width: 100%;
       background: var(--bg-2);
       border: 1px solid var(--line-soft);
@@ -310,6 +312,8 @@ class LoopNewProjectScreen extends LitElement {
     this._error = '';
     this._step = 'form';
     this._githubInfo = null;
+    this._githubOwners = [];
+    this._githubOwner = '';
     this._githubRepoName = '';
     this._githubPrivate = false;
     this._githubCreating = false;
@@ -372,7 +376,11 @@ class LoopNewProjectScreen extends LitElement {
         const res = await fetch('/api/github/status');
         const info = await res.json();
         this._githubInfo = info;
-        if (info.available) {
+        this._githubOwners = info.owners || [];
+        this._githubOwner = this._githubOwners[0]?.login || '';
+        // Prompt when we can create a repo, or when the app is connected but
+        // can't create here (so we can explain why) — otherwise create locally.
+        if (info.available || (info.mode === 'app' && info.installedAccounts?.length)) {
           this._githubRepoName = this._name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
           this._step = 'github-prompt';
           return;
@@ -397,6 +405,7 @@ class LoopNewProjectScreen extends LitElement {
         body: JSON.stringify({
           name: this._githubRepoName.trim(),
           private: this._githubPrivate,
+          owner: this._githubOwner || undefined,
         }),
       });
       const data = await res.json();
@@ -603,6 +612,31 @@ class LoopNewProjectScreen extends LitElement {
 
   _renderGithubPrompt() {
     const busy = this._githubCreating || this._submitting;
+    const owners = this._githubOwners || [];
+    const info = this._githubInfo || {};
+
+    // App connected but no account we can create under: explain and offer Skip.
+    if (owners.length === 0) {
+      return html`
+        <button class="back-link" @click=${() => { this._step = 'form'; this._githubError = ''; }}>
+          ${iconArrowLeft}
+          Back
+        </button>
+        <div class="form-title">Create GitHub repository?</div>
+        <div class="form-subtitle">
+          The GitHub App is connected${info.installedAccounts?.length ? html` (${info.installedAccounts.map(a => `@${a}`).join(', ')})` : ''},
+          but it can't create repositories there. Repo creation needs the app installed on an
+          <strong>organization</strong> with <strong>Administration</strong> access.
+          ${info.installUrl ? html`<a class="github-username" href=${info.installUrl} target="_blank" rel="noopener" style="text-decoration:none">Manage app access →</a>` : ''}
+        </div>
+        <div class="form-actions">
+          <button class="btn-primary" ?disabled=${busy} @click=${() => this._createProject('')}>
+            ${this._cloning ? 'Cloning repository…' : this._submitting ? 'Creating project…' : 'Continue without a repo'}
+          </button>
+        </div>
+      `;
+    }
+
     return html`
       <button class="back-link" @click=${() => { this._step = 'form'; this._githubError = ''; }}>
         ${iconArrowLeft}
@@ -610,13 +644,24 @@ class LoopNewProjectScreen extends LitElement {
       </button>
       <div class="form-title">Create GitHub repository?</div>
       <div class="form-subtitle">
-        ${this._githubInfo?.owner
-          ? html`A new repository can be created under <span class="github-username">@${this._githubInfo.owner}</span>.`
-          : html`GitHub access is configured.`}
-        Would you like to create a new repository for this project?
+        ${owners.length === 1
+          ? html`A new repository can be created under <span class="github-username">@${owners[0].login}</span>.`
+          : html`Choose where to create the new repository.`}
       </div>
 
       <div class="github-prompt">
+        ${owners.length > 1 ? html`
+          <div class="field">
+            <label>Owner</label>
+            <select
+              .value=${this._githubOwner}
+              @change=${e => this._githubOwner = e.target.value}
+              ?disabled=${busy}
+            >
+              ${owners.map(o => html`<option value=${o.login}>${o.login}${o.type === 'Organization' ? ' (org)' : ''}</option>`)}
+            </select>
+          </div>
+        ` : ''}
         <div class="field">
           <label>Repository name</label>
           <input

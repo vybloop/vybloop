@@ -170,6 +170,32 @@ export async function getGithubStatus() {
   };
 }
 
+// --- Public: where can we create a repo? -----------------------------------
+
+// Accounts under which a new repository can actually be created. App mode: each
+// installation on an organization where we have Administration access. PAT mode:
+// the token's own user account (resolved for display). Empty => can't create.
+export async function listRepoTargets() {
+  if (appConfigured()) {
+    const status = await getGithubStatus();
+    return status.installations
+      .filter(i => i.canCreateRepos)
+      .map(i => ({ login: i.account, type: i.type }));
+  }
+  const pat = patValue();
+  if (!pat) return [];
+  try {
+    const resp = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github+json', 'User-Agent': 'loop-app' },
+    });
+    if (resp.ok) {
+      const user = await resp.json();
+      return [{ login: user.login, type: 'User' }];
+    }
+  } catch { /* fall through */ }
+  return [{ login: null, type: 'User' }];
+}
+
 // --- Public: create a repository (used by the new-project flow) ------------
 
 async function ghJson(url, token, body) {
@@ -188,16 +214,20 @@ async function ghJson(url, token, body) {
   return { url: data.clone_url, htmlUrl: data.html_url };
 }
 
-export async function createRepo({ name, isPrivate = false }) {
+export async function createRepo({ name, isPrivate = false, owner }) {
   const body = { name, private: isPrivate, auto_init: true };
   if (appConfigured()) {
     const status = await getGithubStatus();
-    const orgInstall = status.installations.find(i => i.canCreateRepos);
-    if (!orgInstall) {
-      return { error: 'The GitHub App cannot create repositories here. Create the repo on GitHub (or install the app on an organization with Administration access) and paste its URL instead.' };
+    const targets = status.installations.filter(i => i.canCreateRepos);
+    // Honor the requested owner; otherwise default to the first eligible target.
+    const target = owner
+      ? targets.find(i => i.account?.toLowerCase() === owner.toLowerCase())
+      : targets[0];
+    if (!target) {
+      return { error: 'The GitHub App cannot create repositories here. Install it on an organization with Administration access, or paste an existing repository URL instead.' };
     }
-    const token = await getInstallationToken(orgInstall.id);
-    return ghJson(`https://api.github.com/orgs/${orgInstall.account}/repos`, token, body);
+    const token = await getInstallationToken(target.id);
+    return ghJson(`https://api.github.com/orgs/${target.account}/repos`, token, body);
   }
   const pat = patValue();
   if (!pat) return { error: 'No GitHub credentials configured' };

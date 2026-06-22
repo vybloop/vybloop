@@ -43,7 +43,7 @@ import { listTemplates } from './templates.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
 import { startCredentialBroker } from './git-credential-broker.js';
-import { getGithubStatus, createRepo } from './git-auth.js';
+import { getGithubStatus, createRepo, listRepoTargets } from './git-auth.js';
 import { startBuildCapture, startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
 
 const execFileAsync = promisify(execFile);
@@ -458,25 +458,31 @@ app.get('/api/templates', (req, res) => {
   res.json(listTemplates());
 });
 
-// Whether the new-project flow can offer to create a repo (and how).
+// Drives the new-project "create a repo" flow: which accounts we can create
+// under (owners), plus context for a helpful message when we can't.
 app.get('/api/github/status', async (req, res) => {
   try {
     const status = await getGithubStatus();
-    // owner: the account a new repo would be created under (org in app mode).
-    const owner = status.mode === 'app'
-      ? status.installations.find(i => i.canCreateRepos)?.account
-      : undefined;
-    res.json({ available: status.canCreateRepos, mode: status.mode, owner });
+    const owners = await listRepoTargets();
+    res.json({
+      available: owners.length > 0,
+      mode: status.mode,
+      owners,
+      // Accounts the app is installed on (App mode) — used to explain why
+      // creation may be unavailable even though the app is connected.
+      installedAccounts: status.installations?.map(i => i.account) ?? [],
+      installUrl: status.installUrl,
+    });
   } catch {
-    res.json({ available: false });
+    res.json({ available: false, owners: [] });
   }
 });
 
 app.post('/api/github/repos', async (req, res) => {
-  const { name, private: isPrivate = false } = req.body;
+  const { name, private: isPrivate = false, owner } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
-    const result = await createRepo({ name, isPrivate });
+    const result = await createRepo({ name, isPrivate, owner });
     if (result.error) return res.status(400).json({ error: result.error });
     res.json(result);
   } catch (err) {
