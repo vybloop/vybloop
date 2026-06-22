@@ -98,6 +98,7 @@ class LoopProjectScreen extends LitElement {
     _searchExpandedFiles: { state: true },
     _stale: { state: true },
     _buildError: { state: true },
+    _claudeLink: { state: true },
   };
 
   static styles = [css`
@@ -958,6 +959,80 @@ class LoopProjectScreen extends LitElement {
       height: 100% !important;
     }
 
+    .claude-link-toast {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: min(440px, calc(100% - 32px));
+      padding: 10px 12px;
+      background: var(--bg-1);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+      border-radius: 10px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+      animation: claude-link-in 140ms ease-out;
+    }
+    @keyframes claude-link-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .claude-link-icon {
+      display: flex;
+      flex-shrink: 0;
+      color: var(--accent, #d97757);
+    }
+    .claude-link-icon svg { width: 16px; height: 16px; }
+    .claude-link-body {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .claude-link-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-0);
+    }
+    .claude-link-url {
+      font-size: 12px;
+      color: var(--text-1);
+      text-decoration: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .claude-link-url:hover { text-decoration: underline; }
+    .claude-link-open {
+      flex-shrink: 0;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+      background: var(--accent, #d97757);
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .claude-link-open:hover { filter: brightness(1.08); }
+    .claude-link-dismiss {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px;
+      color: var(--text-2, var(--text-1));
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .claude-link-dismiss:hover {
+      color: var(--text-0);
+      background: var(--bg-2, rgba(255, 255, 255, 0.06));
+    }
+
     #monaco-container {
       flex: 1;
       min-height: 0;
@@ -1525,6 +1600,7 @@ class LoopProjectScreen extends LitElement {
     this._termDataDisposable?.dispose();
     this._termResizeDisposable?.dispose();
     this._termWs?.close();
+    clearTimeout(this._linkScanTimer);
     this._term?.dispose();
     this._term = null;
     this._termFit = null;
@@ -1618,6 +1694,7 @@ class LoopProjectScreen extends LitElement {
       } else {
         this._term.write(data);
       }
+      this._scheduleLinkScan();
     };
 
     ws.onclose = () => {
@@ -1640,6 +1717,68 @@ class LoopProjectScreen extends LitElement {
         ws.send(JSON.stringify({ type: 'resize', cols, rows }));
       }
     });
+  }
+
+  // Watch the terminal screen buffer for claude.com links and surface a
+  // click helper so the user doesn't have to select/copy/paste them.
+  _scheduleLinkScan() {
+    clearTimeout(this._linkScanTimer);
+    this._linkScanTimer = setTimeout(() => this._scanForLinks(), 300);
+  }
+
+  _scanForLinks() {
+    if (!this._term) return;
+    const buf = this._term.buffer.active;
+    const cols = this._term.cols;
+    // Characters that can legitimately appear inside a URL. Used to decide
+    // whether a row that runs to the terminal edge is a wrapped URL.
+    const urlChar = /[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]/;
+
+    // Rebuild logical lines. xterm's `isWrapped` flag is unreliable for the way
+    // Claude Code emits these links, so we also stitch a row onto the next one
+    // whenever it's filled all the way to the last column and ends with a valid
+    // URL character — a strong signal the URL continues on the following row.
+    const lines = [];
+    let current = '';
+    let continuing = false;
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (!line) continue;
+      const trimmed = line.translateToString(true);
+      if (continuing) {
+        current += trimmed;
+      } else {
+        if (current) lines.push(current);
+        current = trimmed;
+      }
+      // `false` keeps trailing whitespace so we can tell if the row is full.
+      const raw = line.translateToString(false);
+      const filledToEdge = raw.length >= cols && raw[cols - 1] !== ' ';
+      const endsWithUrlChar = trimmed.length > 0 && urlChar.test(trimmed[trimmed.length - 1]);
+      const nextWrapped = buf.getLine(i + 1)?.isWrapped;
+      continuing = !!nextWrapped || (filledToEdge && endsWithUrlChar);
+    }
+    if (current) lines.push(current);
+
+    const matches = lines.join('\n').match(/https:\/\/claude\.com[^\s'"`<>]*/g);
+    if (!matches || !matches.length) {
+      this._claudeLink = null;
+      return;
+    }
+    // Most recent match, minus trailing punctuation that isn't part of the URL.
+    const link = matches[matches.length - 1].replace(/[.,;:!?)\]}>]+$/, '');
+    if (link === this._dismissedLink) return;
+    if (link !== this._claudeLink) this._claudeLink = link;
+  }
+
+  _openClaudeLink() {
+    if (this._claudeLink) window.open(this._claudeLink, '_blank', 'noopener,noreferrer');
+    this._claudeLink = null;
+  }
+
+  _dismissClaudeLink() {
+    this._dismissedLink = this._claudeLink;
+    this._claudeLink = null;
   }
 
   async _loadChanges() {
@@ -3336,8 +3475,23 @@ class LoopProjectScreen extends LitElement {
             </div>
           </div>
 
-          <div class="terminal-body" style="display:${this._activeTab === 'agent' ? 'flex' : 'none'};padding:0;overflow:hidden">
+          <div class="terminal-body" style="display:${this._activeTab === 'agent' ? 'flex' : 'none'};padding:0;overflow:hidden;position:relative">
             <div id="xterm-container"></div>
+            ${this._claudeLink ? html`
+              <div class="claude-link-toast">
+                <span class="claude-link-icon">${iconExternal}</span>
+                <div class="claude-link-body">
+                  <div class="claude-link-label">Open this link?</div>
+                  <a class="claude-link-url" href=${this._claudeLink} target="_blank" rel="noopener noreferrer" title=${this._claudeLink}>${this._claudeLink}</a>
+                </div>
+                <button class="claude-link-open" @click=${() => this._openClaudeLink()}>Open</button>
+                <button class="claude-link-dismiss" @click=${() => this._dismissClaudeLink()} title="Dismiss">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+            ` : ''}
           </div>
           <div style="display:${this._activeTab === 'logs' ? 'flex' : 'none'};flex:1;min-height:0">
             ${this._activeTab === 'logs' || this._logSse ? this._renderLogs() : ''}
