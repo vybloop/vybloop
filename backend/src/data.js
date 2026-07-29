@@ -447,8 +447,16 @@ export async function getProject(id) {
   };
 }
 
+function slugify(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export function createProject(data) {
-  const id = data.name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const id = slugify(data.name) || 'project';
   if (projects.some(p => p.id === id)) {
     return { error: 'a project with this name already exists' };
   }
