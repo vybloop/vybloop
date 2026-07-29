@@ -8,6 +8,14 @@ services:
       - path: .env
         required: false
     environment:
+      # Disable libuv's io_uring backend. libuv 1.48 (bundled with the Node in
+      # this image) can spin the event-loop thread at 100% CPU via its io_uring
+      # integration on 6.x kernels — the server keeps burning a core but stops
+      # answering HTTP, so pages return "empty reply from server". A burst of
+      # fs/socket activity (e.g. a sandbox restart tearing down sessions +
+      # reconnects + chokidar) is the usual trigger. Falling back to the
+      # epoll/threadpool path avoids it with no meaningful perf cost here.
+      - UV_USE_IO_URING=0
       - ANTHROPIC_API_KEY
       - PORT
       - GITHUB_APP_ID
