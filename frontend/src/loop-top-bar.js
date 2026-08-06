@@ -341,7 +341,9 @@ class LoopTopBar extends LitElement {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
       }
+      const body = await res.json().catch(() => ({}));
       this._menuOpen = false;
+      if (body.version) alert(`Sandbox rebuilt — Claude Code ${body.version}`);
     } catch (err) {
       alert(`Sandbox ${action} failed: ${err.message}`);
     } finally {

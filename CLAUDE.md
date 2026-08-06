@@ -54,7 +54,7 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 | `GET` | `/api/config` | Get config (e.g. `terminalMode`). |
 | `PATCH` | `/api/config` | Update config. |
 | `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current `claude-inner` image. |
-| `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. |
+| `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. Returns `{ version }` — the Claude Code version in the new image. |
 
 WebSocket endpoint: `ws://host/api/projects/:id/ws/:type` where `type` is `agent` or `shell`.
 
@@ -83,6 +83,8 @@ podman run --rm -it \
   -w /project \
   claude-inner claude --dangerously-skip-permissions
 ```
+
+**Claude Code version in the sandbox**: `inner-container/Dockerfile` installs `@anthropic-ai/claude-code@latest` from npm. Keep its Node version at or above the package's `engines.node` — npm silently installs the newest release whose engines the running Node satisfies rather than failing, so a too-old Node pins the sandbox to an ancient Claude Code that no `--no-cache` rebuild can move (this is what stuck it at 2.1.197: releases from 2.1.198 on require Node ≥22). To update Claude Code, hit **Rebuild sandbox** in the UI (`POST /api/sandbox/rebuild`, `podman build --no-cache`) and check the version it reports back. `start.sh` only rebuilds when the Dockerfile hash changes, so a restart alone will not pull a newer release.
 
 The `shell` session type runs `bash` in the same container. It also mounts `/claudeconfig` and sets `GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig` so the git credential helper works there (see GitHub auth below).
 

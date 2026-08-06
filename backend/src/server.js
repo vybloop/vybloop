@@ -661,6 +661,20 @@ async function rebuildSandboxImage() {
     '--label', `dockerfile-hash=${hash}`,
     INNER_CONTAINER_DIR,
   ], { timeout: 600_000 });
+  return await sandboxClaudeVersion();
+}
+
+// Version of Claude Code baked into the current `claude-inner` image, so the UI
+// can confirm a rebuild actually moved the version forward.
+async function sandboxClaudeVersion() {
+  try {
+    const { stdout } = await execFileAsync('podman', [
+      'run', '--rm', 'claude-inner', 'claude', '--version',
+    ], { timeout: 60_000 });
+    return stdout.trim().split(/\s+/)[0] || null;
+  } catch {
+    return null;
+  }
 }
 
 // Restart the sandbox: kill running sessions so they reconnect with the current
@@ -679,8 +693,8 @@ app.post('/api/sandbox/restart', async (req, res) => {
 app.post('/api/sandbox/rebuild', async (req, res) => {
   try {
     await destroyAllSessions();
-    await rebuildSandboxImage();
-    res.json({ ok: true });
+    const version = await rebuildSandboxImage();
+    res.json({ ok: true, version });
   } catch (err) {
     console.error('Sandbox rebuild failed:', err.message);
     res.status(500).json({ error: err.message });
