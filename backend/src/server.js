@@ -38,6 +38,9 @@ import {
   renameItem,
   deleteItem,
   searchFiles,
+  createWorkstream,
+  listWorkstreams,
+  getWorkstreamIds,
 } from './data.js';
 import { listTemplates } from './templates.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
@@ -85,6 +88,18 @@ async function getContainerPorts(projectId, repoPath) {
   return ports;
 }
 
+// Stop everything live for a project id (a project or one of its workstreams)
+// before its files are removed.
+async function teardownProject(id, isRunning) {
+  await destroyProjectSessions(id);
+  stopLogCapture(id);
+  destroyWatcher(id);
+  notifyProjectStopped(id);
+  if (isRunning) {
+    await composeDown(id, `/data/${id}/git`).catch(() => {});
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -129,18 +144,37 @@ app.delete('/api/projects/:id', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'not found' });
 
   // Tear down everything live for this project before removing its files, so we
-  // don't leave orphaned containers, watchers, or log tails behind.
-  await destroyProjectSessions(id);
-  stopLogCapture(id);
-  destroyWatcher(id);
-  notifyProjectStopped(id);
-  if (project.hasCompose && project.status === 'running') {
-    await composeDown(id, `/data/${id}/git`).catch(() => {});
+  // don't leave orphaned containers, watchers, or log tails behind. Workstreams
+  // are separate ids with their own sessions/containers, so they need the same
+  // teardown explicitly — deleting the project deletes them too.
+  for (const wsId of getWorkstreamIds(id)) {
+    const ws = await getProject(wsId);
+    await teardownProject(wsId, ws?.hasCompose && ws.status === 'running');
   }
+  await teardownProject(id, project.hasCompose && project.status === 'running');
 
   const result = deleteProject(id);
   if (!result) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
+});
+
+// Workstreams: isolated repo copies of a project, each with its own branch and
+// sandbox. Addressed by the composite id `<projectId>--<workstream>`, so every
+// other /api/projects/:id/* route works on them unchanged.
+app.get('/api/projects/:id/workstreams', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const list = listWorkstreams(project.parentId ?? project.id);
+  if (!list) return res.status(404).json({ error: 'not found' });
+  res.json(list);
+});
+
+app.post('/api/projects/:id/workstreams', (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
+  const result = createWorkstream(req.params.id, name);
+  if (result.error) return res.status(result.code || 400).json({ error: result.error });
+  res.status(201).json(result);
 });
 
 app.get('/api/projects/:id/changes', async (req, res) => {

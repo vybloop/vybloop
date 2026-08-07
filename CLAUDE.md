@@ -36,6 +36,8 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 
 `status` and `changes` are runtime-only; not persisted. Project repos are stored at `/data/<id>/git`.
 
+Workstream rows live in the same `projects` array and additionally carry `parentId` and `workstream` (see "Workstreams" below).
+
 `hasCompose` is a runtime-only boolean included in project responses — `true` when a `docker-compose.yml` / `compose.yml` (or `.yaml` variants) exists in the repo root.
 
 ### API reference — `backend/src/server.js`
@@ -50,6 +52,8 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 | `POST` | `/api/projects/:id/run` | Start or stop the project's compose stack. Requires `docker-compose.yml` in the repo root. Returns `{ status }`. |
 | `POST` | `/api/projects/:id/changes/stage-all` | Stage all changed files. |
 | `POST` | `/api/projects/:id/changes/:fileId/toggle` | Toggle staged/unstaged for a file. |
+| `GET` | `/api/projects/:id/workstreams` | List the project's workstreams (default first). |
+| `POST` | `/api/projects/:id/workstreams` | Create a workstream. Body: `{ name }`. Returns 201 with `status: "cloning"`. |
 | `GET` | `/api/templates` | List available project templates. |
 | `GET` | `/api/config` | Get config (e.g. `terminalMode`). |
 | `PATCH` | `/api/config` | Update config. |
@@ -57,6 +61,35 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 | `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. Returns `{ version }` — the Claude Code version in the new image. |
 
 WebSocket endpoint: `ws://host/api/projects/:id/ws/:type` where `type` is `agent` or `shell`.
+
+### Workstreams
+
+A **workstream** is an isolated copy of a project's repo — its own working tree, its own git branch, its own agent/shell sandbox, its own compose stack — so several agents can work on different features in parallel. The original checkout is the "default" workstream. URLs: `/project/<projectId>` (default) and `/project/<projectId>/<workstream>`.
+
+**A workstream is just a project row with a parent.** It is stored in the same `projects` array with
+
+```
+id       = `${parentId}--${workstream}`     e.g. "quill--feat-auth"
+parentId = "quill"
+workstream = "feat-auth"
+```
+
+`slugify()` collapses runs of `-`, so no plain project id can ever contain `--` and the composite is unambiguous. Because *everything* in the backend is keyed by a single opaque project id — repo path `/data/<id>/git`, `projectStatus`, terminal `sessions`, `watchers`, log buffers, the compose project name and `pod_<id>`, and `LOOP_PROJECT_ID` for the IPC hook — workstreams get full isolation for free and every `/api/projects/:id/*` route works on them unchanged. **Do not add a second "workstream id" parameter to these paths**; widen the id instead.
+
+Creation (`createWorkstream` in `data.js`) requires an upstream (`project.repo`) and runs in the background:
+
+```sh
+git clone /data/<parentId>/git /data/<parentId>--<slug>/git   # local, fast, carries unpushed commits
+git remote set-url origin <upstream>                          # push independently of the parent
+git fetch origin
+git checkout -b <slug> --no-track origin/<baseBranch>
+```
+
+`--no-track` is load-bearing: without it git sets the branch's upstream to `origin/<baseBranch>` and a later `git push` refuses because the names don't match. The branch stays unpublished until the first sync, where `syncProject` runs `git push -u origin HEAD` (`getRemoteStatus` reports `hasUpstream: false` and the UI shows **Publish** instead of **Sync**).
+
+Deleting a project deletes its workstreams; `server.js` tears down each child's sessions/watchers/logs/containers first, because `destroyProjectSessions(parentId)`'s `startsWith(\`${id}:\`)` filter does not match child session keys.
+
+**Known limitation**: workstreams share the host ports declared in `docker-compose.yml`, so running two at once fails on a port conflict. Dynamic port assignment is future work.
 
 ### Terminal system
 

@@ -52,7 +52,9 @@ class LoopApp extends LitElement {
       this._navigate('project', e.detail.project.id);
     });
     this.addEventListener('project-deleted', (e) => {
-      this._projects = this._projects.filter(p => p.id !== e.detail.id);
+      // Deleting a project deletes its workstreams too.
+      this._projects = this._projects.filter(p => p.id !== e.detail.id && p.parentId !== e.detail.id);
+      if (e.detail.stay) return;
       this._navigate('home', null);
     });
   }
@@ -86,7 +88,10 @@ class LoopApp extends LitElement {
       route = 'new';
     } else if (path.startsWith('/project/')) {
       route = 'project';
-      projectId = path.slice('/project/'.length);
+      // /project/<projectId> is the default workstream;
+      // /project/<projectId>/<workstream> maps to the composite id used everywhere.
+      const [base, workstream] = path.slice('/project/'.length).split('/').filter(Boolean);
+      projectId = workstream ? `${base}--${workstream}` : base || null;
     } else {
       route = 'home';
     }
@@ -106,7 +111,14 @@ class LoopApp extends LitElement {
 
   _routeToPath(route, projectId) {
     if (route === 'new') return '/new';
-    if (route === 'project') return `/project/${projectId}`;
+    if (route === 'project') {
+      // Composite workstream ids ("<project>--<workstream>") render as two path
+      // segments. Plain project ids never contain '--' (slugify collapses runs
+      // of '-'), so splitting on the first occurrence is unambiguous.
+      const sep = projectId.indexOf('--');
+      if (sep === -1) return `/project/${projectId}`;
+      return `/project/${projectId.slice(0, sep)}/${projectId.slice(sep + 2)}`;
+    }
     return '/';
   }
 
@@ -128,7 +140,11 @@ class LoopApp extends LitElement {
       const res = await fetch(`/api/projects/${projectId}`);
       if (res.ok) {
         const project = await res.json();
-        this._projects = this._projects.map(p => p.id === projectId ? project : p);
+        // Append when unknown — e.g. a deep link, or a workstream created in
+        // another tab — so the project screen isn't stuck on "Loading…".
+        this._projects = this._projects.some(p => p.id === projectId)
+          ? this._projects.map(p => p.id === projectId ? project : p)
+          : [...this._projects, project];
       }
     } catch (e) {
       console.warn('Could not fetch project', e);

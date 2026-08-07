@@ -3,7 +3,7 @@ import './loop-top-bar.js';
 import {
   iconArrowLeft, iconPlay, iconStop, iconRefresh,
   iconExternal, iconTerminal, iconSparkle, iconCopy, iconCheck,
-  iconBranch, iconChevron, iconPencil, iconSend
+  iconBranch, iconChevron, iconPencil, iconSend, iconMore, iconPlus
 } from './icons.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -99,6 +99,10 @@ class LoopProjectScreen extends LitElement {
     _stale: { state: true },
     _buildError: { state: true },
     _claudeLink: { state: true },
+    _panelMenu: { state: true },
+    _workstreams: { state: true },
+    _wsMenuOpen: { state: true },
+    _creatingWorkstream: { state: true },
   };
 
   static styles = [css`
@@ -1159,6 +1163,11 @@ class LoopProjectScreen extends LitElement {
       line-height: 1.5;
     }
     .dialog-body strong { color: var(--fg-1); }
+    .dialog-error {
+      font-size: 12px;
+      color: var(--del);
+      line-height: 1.4;
+    }
     .dialog-actions {
       display: flex;
       justify-content: flex-end;
@@ -1384,6 +1393,73 @@ class LoopProjectScreen extends LitElement {
       margin: 3px 2px;
     }
 
+    /* Workstream switcher (breadcrumb) */
+    .ws-chip-wrap { position: relative; display: inline-flex; margin-left: 6px; }
+    .ws-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--fg-2);
+      background: var(--bg-3);
+      border: 1px solid var(--line-soft);
+      border-radius: 100px;
+      padding: 1px 7px 1px 8px;
+      cursor: pointer;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .ws-chip:hover, .ws-chip.open { color: var(--fg-0); border-color: var(--accent); }
+    .ws-chip svg { width: 10px; height: 10px; }
+    .ws-chip-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ws-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      min-width: 200px;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      padding: 4px;
+      z-index: 200;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+    .ws-menu-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--fg-3);
+      padding: 4px 8px 5px;
+    }
+    .ws-menu-item {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      text-align: left;
+      padding: 5px 8px;
+      border: none;
+      background: transparent;
+      color: var(--fg-1);
+      font-size: 12px;
+      font-family: var(--font-mono);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .ws-menu-item:hover { background: var(--bg-3); }
+    .ws-menu-item.active { color: var(--fg-0); }
+    .ws-menu-check {
+      width: 12px;
+      display: inline-flex;
+      align-items: center;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+    .ws-menu-check svg { width: 12px; height: 12px; }
+    .ws-menu-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ws-menu-hint { margin-left: auto; font-size: 10px; color: var(--fg-3); font-family: var(--font-sans); }
+
     /* Dialog text input */
     .dialog-input {
       width: calc(100% - 22px);
@@ -1456,6 +1532,11 @@ class LoopProjectScreen extends LitElement {
     this._searchExpandedFiles = new Set();
     this._stale = false;
     this._buildError = '';
+    this._panelMenu = null;   // null | { x, y } — the changes panel "..." menu
+    this._workstreams = [];   // [{ id, workstream, branch, status }] — default first
+    this._wsMenuOpen = false;
+    this._creatingWorkstream = false;
+    this._connectedProjectId = null;
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileViewStates = new Map();   // path -> IEditorViewState
     this._fileMtimes = new Map();       // path -> server mtime
@@ -1504,15 +1585,22 @@ class LoopProjectScreen extends LitElement {
 
   updated(changed) {
     if (changed.has('project') && this.project) {
+      // Switching to a different project or workstream: everything below is
+      // keyed on the project id, so drop the old connections and state first.
+      const switched = this._connectedProjectId !== null && this._connectedProjectId !== this.project.id;
+      if (switched) this._resetForProjectSwitch();
+      this._connectedProjectId = this.project.id;
+
       this._running = this.project.status === 'running';
       this._stopping = this.project.status === 'stopping';
       this._loadChanges();
       this._loadFileTree();
+      this._loadWorkstreams();
       this._connectSse();
       // If project arrived after firstUpdated (e.g. page refresh), #xterm-container
       // wasn't in the DOM yet when firstUpdated ran, so initialize now.
       if (!this._term) this._initTerminal();
-      else if (!this._termWs) this._connectWs();
+      else if (!this._termWs || switched) this._connectWs();
     }
     if (changed.has('project') && this.project?.status === 'running') {
       this._fetchPorts();
@@ -1585,6 +1673,55 @@ class LoopProjectScreen extends LitElement {
         this.shadowRoot.querySelector('.mobile-input-textarea')?.focus();
       });
     }
+  }
+
+  // Drop everything tied to the previous project id when navigating between
+  // projects/workstreams without unmounting: the agent PTY, the log stream, the
+  // open editors, and the cached git/file state all belong to the old repo.
+  _resetForProjectSwitch() {
+    if (this._termWs) {
+      this._termWs.onclose = null;   // don't let the reconnect timer fire
+      this._termWs.close();
+      this._termWs = null;
+    }
+    this._term?.reset();
+    this._logSse?.close();
+    this._logSse = null;
+    this._logLines = [];
+    this._logEmpty = true;
+    this._files = [];
+    this._fileTree = null;
+    this._remoteStatus = null;
+    this._ports = [];
+    this._stale = false;
+    this._buildError = '';
+    this._commitMsg = '';
+    this._commitError = '';
+    this._committed = false;
+    this._claudeLink = null;
+    this._selectedFiles = new Set();
+    this._expandedDirs = new Set();
+    this._searchResults = null;
+    this._activeTab = 'agent';
+
+    // Close every file/diff/image tab and dispose its monaco state.
+    this._openFiles = [];
+    this._openDiffs = [];
+    this._openImages = [];
+    this._fileChangeListeners.forEach(d => d.dispose());
+    this._fileChangeListeners.clear();
+    this._fileModels.forEach(m => m.dispose());
+    this._fileModels.clear();
+    this._fileViewStates.clear();
+    this._fileMtimes.clear();
+    this._fileCleanVersions.clear();
+    this._diffChangeListeners.forEach(d => d.dispose());
+    this._diffChangeListeners.clear();
+    this._diffModels.forEach(({ original, modified }) => { original?.dispose(); modified?.dispose(); });
+    this._diffModels.clear();
+    this._diffViewStates.clear();
+    this._diffMtimes.clear();
+    this._diffCleanVersions.clear();
   }
 
   disconnectedCallback() {
@@ -1984,6 +2121,168 @@ class LoopProjectScreen extends LitElement {
     } catch (e) {
       console.error('Failed to revert file', e);
     }
+  }
+
+  // --- Workstreams ---------------------------------------------------------
+
+  // The id of the project this workstream belongs to (itself, if it is the
+  // default workstream).
+  get _parentId() {
+    return this.project?.parentId ?? this.project?.id ?? null;
+  }
+
+  async _loadWorkstreams() {
+    if (!this.project) return;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/workstreams`);
+      this._workstreams = res.ok ? await res.json() : [];
+    } catch (e) {
+      console.error('Failed to load workstreams', e);
+      this._workstreams = [];
+    }
+  }
+
+  // The changes panel "..." menu. Positioned fixed off the button's rect so the
+  // scrolling sidebar can't clip it.
+  _showPanelMenu(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    this._panelMenu = { x: rect.right - 180, y: rect.bottom + 4 };
+    const close = () => {
+      this._panelMenu = null;
+      document.removeEventListener('click', close);
+      document.removeEventListener('contextmenu', close);
+    };
+    document.addEventListener('click', close);
+    document.addEventListener('contextmenu', close);
+  }
+
+  _renderPanelMenu() {
+    const m = this._panelMenu;
+    if (!m) return '';
+    return html`
+      <div class="ctx-menu" style="left:${Math.max(8, m.x)}px;top:${m.y}px" @click=${e => e.stopPropagation()}>
+        <button class="ctx-menu-item" @click=${() => this._openCreateWorkstreamDialog()}>
+          Create workstream…
+        </button>
+      </div>
+    `;
+  }
+
+  _openCreateWorkstreamDialog() {
+    this._panelMenu = null;
+    this._wsMenuOpen = false;
+    this._dialogInput = '';
+    this._dialog = { type: 'create-workstream' };
+    requestAnimationFrame(() => this.shadowRoot.querySelector('.dialog-input')?.focus());
+  }
+
+  async _createWorkstream(name) {
+    if (!name.trim() || this._creatingWorkstream) return;
+    this._creatingWorkstream = true;
+    try {
+      // Always parent off the project, so creating from inside a workstream
+      // makes a sibling rather than failing on the no-nesting rule.
+      const res = await fetch(`/api/projects/${this._parentId}/workstreams`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'Failed to create workstream');
+
+      // The repo copy runs in the background. Wait for it here so a failure is
+      // reported in the dialog instead of after navigating to a broken repo.
+      const project = await this._waitForWorkstream(body.id);
+      if (project.status === 'error') {
+        await fetch(`/api/projects/${body.id}`, { method: 'DELETE' }).catch(() => {});
+        throw new Error(project.statusError || 'Failed to create the workstream. Check the server logs.');
+      }
+
+      this._dialog = null;
+      this.dispatchEvent(new CustomEvent('project-created', {
+        detail: { project }, bubbles: true, composed: true,
+      }));
+    } catch (e) {
+      this._dialog = { ...this._dialog, error: e.message };
+    } finally {
+      this._creatingWorkstream = false;
+    }
+  }
+
+  // Poll a new workstream until its background repo copy finishes. Gives up
+  // after ~5 minutes rather than waiting forever.
+  async _waitForWorkstream(id) {
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const res = await fetch(`/api/projects/${id}`);
+        if (!res.ok) return { status: 'error', statusError: 'Workstream disappeared while being created.' };
+        const project = await res.json();
+        if (project.status !== 'cloning') return project;
+      } catch {
+        // Transient fetch error — keep polling until the deadline.
+      }
+    }
+    return { status: 'error', statusError: 'Timed out waiting for the workstream repository.' };
+  }
+
+  _switchWorkstream(id) {
+    this._wsMenuOpen = false;
+    if (!id || id === this.project?.id) return;
+    this.dispatchEvent(new CustomEvent('navigate-project', {
+      detail: { id }, bubbles: true, composed: true,
+    }));
+  }
+
+  _toggleWorkstreamMenu(e) {
+    e.stopPropagation();
+    if (this._wsMenuOpen) {
+      this._wsMenuOpen = false;
+      return;
+    }
+    this._wsMenuOpen = true;
+    // Any click closes the menu — items handle their action on the way up.
+    const close = () => {
+      this._wsMenuOpen = false;
+      document.removeEventListener('click', close);
+    };
+    document.addEventListener('click', close);
+  }
+
+  _renderWorkstreamChip() {
+    const current = this.project?.workstream ?? null;
+    return html`
+      <div class="ws-chip-wrap">
+        <button class="ws-chip ${this._wsMenuOpen ? 'open' : ''}" title="Switch workstream" @click=${this._toggleWorkstreamMenu}>
+          ${iconBranch}
+          <span class="ws-chip-name">${current ?? 'default'}</span>
+          ${iconChevron}
+        </button>
+        ${this._wsMenuOpen ? html`
+          <div class="ws-menu">
+            <div class="ws-menu-label">Workstreams</div>
+            ${this._workstreams.map(ws => html`
+              <button
+                class="ws-menu-item ${ws.id === this.project?.id ? 'active' : ''}"
+                @click=${() => this._switchWorkstream(ws.id)}
+              >
+                <span class="ws-menu-check">${ws.id === this.project?.id ? iconCheck : ''}</span>
+                <span class="ws-menu-name">${ws.workstream ?? 'default'}</span>
+                ${ws.status === 'cloning' ? html`<span class="ws-menu-hint">creating…</span>` : ''}
+              </button>
+            `)}
+            <div class="ctx-menu-sep"></div>
+            <button class="ws-menu-item" @click=${() => this._openCreateWorkstreamDialog()}>
+              <span class="ws-menu-check">${iconPlus}</span>
+              <span class="ws-menu-name">New workstream…</span>
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
   }
 
   _openCreateFolderDialog(parentPath) {
@@ -2529,6 +2828,32 @@ class LoopProjectScreen extends LitElement {
         <div class="dialog-actions">
           <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
           <button class="dialog-btn dialog-btn-danger" @click=${() => this._saveDiffFile(d.tabId, true)}>Overwrite</button>
+        </div>
+      `;
+    }
+    if (d.type === 'create-workstream') {
+      const submit = () => this._createWorkstream(this._dialogInput);
+      return html`
+        <div class="dialog-title">New Workstream</div>
+        <div class="dialog-body">
+          An isolated copy of the repo with its own branch and its own agent sandbox,
+          so you can work on something else in parallel.
+        </div>
+        <input
+          class="dialog-input"
+          type="text"
+          placeholder="feature-name"
+          .value=${this._dialogInput}
+          @input=${e => this._dialogInput = e.target.value}
+          @keydown=${e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') this._dialog = null; }}
+        />
+        ${d.error ? html`<div class="dialog-error">${d.error}</div>` : ''}
+        <div class="dialog-actions">
+          <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
+          <button class="dialog-btn dialog-btn-primary"
+            ?disabled=${!this._dialogInput.trim() || this._creatingWorkstream}
+            @click=${submit}
+          >${this._creatingWorkstream ? 'Creating…' : 'Create'}</button>
         </div>
       `;
     }
@@ -3089,6 +3414,7 @@ class LoopProjectScreen extends LitElement {
             <div class="section-actions" @click=${e => e.stopPropagation()}>
               <button class="link-btn" @click=${this._stageAll}>Stage all</button>
               <button class="icon-btn-sm" title="Refresh" @click=${this._loadChanges}>${iconRefresh}</button>
+              <button class="icon-btn-sm" title="More actions" @click=${this._showPanelMenu}>${iconMore}</button>
             </div>
           </div>
 
@@ -3173,8 +3499,12 @@ class LoopProjectScreen extends LitElement {
                       class="sync-btn"
                       ?disabled=${this._syncing}
                       @click=${this._sync}
-                      title="Fetch, pull, and push"
-                    >${this._syncing ? 'Syncing…' : 'Sync'}</button>
+                      title=${this._remoteStatus.hasUpstream === false
+                        ? 'Push this branch and set its upstream'
+                        : 'Fetch, pull, and push'}
+                    >${this._syncing
+                      ? (this._remoteStatus.hasUpstream === false ? 'Publishing…' : 'Syncing…')
+                      : (this._remoteStatus.hasUpstream === false ? 'Publish' : 'Sync')}</button>
                   ` : ''}
                   <button
                     class="commit-btn"
@@ -3383,6 +3713,7 @@ class LoopProjectScreen extends LitElement {
             <path d="m9 6 6 6-6 6"/>
           </svg>
           <span style="color:var(--fg-1);font-size:13px;font-weight:500">${this.project.name}</span>
+          ${this._renderWorkstreamChip()}
           <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-family:var(--font-mono);color:var(--fg-2);background:var(--bg-3);border:1px solid var(--line-soft);border-radius:100px;padding:1px 8px;margin-left:6px">
             <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
@@ -3523,6 +3854,7 @@ class LoopProjectScreen extends LitElement {
 
       ${this._renderContextMenu()}
       ${this._renderChangesContextMenu()}
+      ${this._renderPanelMenu()}
 
       ${this._narrow && this._activeTab !== 'changes' && !this._isFilePath(this._activeTab) ? html`
         ${this._inputOpen ? html`

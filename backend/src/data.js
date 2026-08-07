@@ -278,16 +278,51 @@ async function countGitChanges(id) {
 export async function getRemoteStatus(id) {
   const cwd = gitDir(id);
   const tracking = await runGitResult(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  if (!tracking.ok) return null;
+
+  // A freshly created workstream branch has no upstream until its first push.
+  // Report that state (rather than null) so the UI can offer "Publish" instead
+  // of hiding the sync affordance entirely. Ahead is measured against the
+  // remote-tracking ref the branch was forked from, when it still resolves.
+  if (!tracking.ok) {
+    if (!(await hasRemote(cwd))) return null;
+    const base = await forkPoint(cwd);
+    const ahead = base
+      ? parseInt((await runGitResult(cwd, ['rev-list', '--count', `${base}..HEAD`])).stdout.trim(), 10) || 0
+      : 0;
+    return { remote: null, hasUpstream: false, ahead, behind: 0 };
+  }
+
   const [aheadRes, behindRes] = await Promise.all([
     runGitResult(cwd, ['rev-list', '--count', '@{u}..HEAD']),
     runGitResult(cwd, ['rev-list', '--count', 'HEAD..@{u}']),
   ]);
   return {
     remote: tracking.stdout.trim(),
+    hasUpstream: true,
     ahead: parseInt(aheadRes.stdout.trim(), 10) || 0,
     behind: parseInt(behindRes.stdout.trim(), 10) || 0,
   };
+}
+
+// True when the repo has an `origin` remote to push to.
+async function hasRemote(cwd) {
+  const res = await runGitResult(cwd, ['remote', 'get-url', 'origin']);
+  return res.ok && !!res.stdout.trim();
+}
+
+// Best-effort base for an unpublished branch: the remote-tracking ref it was
+// branched from. Returns null when nothing usable resolves.
+async function forkPoint(cwd) {
+  const head = await runGitResult(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const candidates = [];
+  const headName = head.stdout.trim();
+  if (headName && headName !== 'HEAD') candidates.push(`origin/${headName}`);
+  candidates.push('origin/HEAD');
+  for (const ref of candidates) {
+    const res = await runGitResult(cwd, ['rev-parse', '--verify', '--quiet', ref]);
+    if (res.ok && res.stdout.trim()) return ref;
+  }
+  return null;
 }
 
 export async function syncProject(id) {
@@ -296,7 +331,14 @@ export async function syncProject(id) {
   const cwd = gitDir(id);
 
   const tracking = await runGitResult(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  if (!tracking.ok) return { ok: false, error: 'no remote tracking branch configured' };
+  if (!tracking.ok) {
+    // Unpublished branch (a fresh workstream): there is nothing to rebase onto,
+    // so publish it and set up tracking in one step.
+    if (!(await hasRemote(cwd))) return { ok: false, error: 'no remote tracking branch configured' };
+    const pushRes = await runGitResult(cwd, ['push', '-u', 'origin', 'HEAD']);
+    if (!pushRes.ok) return { ok: false, error: pushRes.stderr.trim() || 'push failed' };
+    return { ok: true };
+  }
 
   await runGitResult(cwd, ['fetch']);
 
@@ -475,23 +517,181 @@ export function createProject(data) {
   return { ...project, status: 'idle', changes: 0 };
 }
 
+// --- Workstreams -----------------------------------------------------------
+//
+// A workstream is an isolated copy of a project's repo (own working tree, own
+// branch, own agent/shell sandbox, own compose stack). It is stored as an
+// ordinary project row carrying `parentId` + `workstream`, with the composite
+// id `<parentId>--<workstream>`. Because slugify() collapses runs of '-', no
+// plain project id can ever contain '--', so the composite is unambiguous —
+// and every subsystem keyed on a project id (repo path, terminal sessions,
+// watchers, log capture, compose project name, LOOP_PROJECT_ID) isolates
+// workstreams for free, with no changes.
+
+const WORKSTREAM_SEPARATOR = '--';
+
+function workstreamId(parentId, slug) {
+  return `${parentId}${WORKSTREAM_SEPARATOR}${slug}`;
+}
+
+// Every workstream belonging to a project, newest last, excluding the default.
+function childrenOf(parentId) {
+  return projects.filter(p => p.parentId === parentId);
+}
+
+// The workstream switcher's data: the default checkout first, then each
+// workstream. `workstream` is null for the default.
+export function listWorkstreams(parentId) {
+  const parent = projects.find(p => p.id === parentId && !p.parentId);
+  if (!parent) return null;
+  const entry = (p, slug) => ({
+    id: p.id,
+    workstream: slug,
+    branch: p.branch,
+    status: projectStatus[p.id] ?? 'idle',
+  });
+  return [entry(parent, null), ...childrenOf(parentId).map(p => entry(p, p.workstream))];
+}
+
+// Create a workstream: register the row, then in the background clone the
+// parent's checkout locally (fast, and it carries commits the parent hasn't
+// pushed yet), repoint origin at the upstream, and branch off it.
+export function createWorkstream(parentId, name) {
+  const parent = projects.find(p => p.id === parentId);
+  if (!parent) return { error: 'not found', code: 404 };
+  if (parent.parentId) return { error: 'workstreams cannot be nested', code: 400 };
+  if (!parent.repo) return { error: 'workstreams require an upstream repository', code: 400 };
+
+  const slug = slugify(name || '');
+  if (!slug) return { error: 'a valid workstream name is required', code: 400 };
+
+  const id = workstreamId(parentId, slug);
+  if (projects.some(p => p.id === id)) {
+    return { error: 'a workstream with this name already exists', code: 409 };
+  }
+
+  const parentGit = gitDir(parentId);
+  if (!existsSync(parentGit)) {
+    return { error: 'the project repository is not available yet', code: 409 };
+  }
+
+  const workstream = {
+    id,
+    name: parent.name,
+    parentId,
+    workstream: slug,
+    repo: parent.repo,
+    description: '',
+    branch: slug,
+    template: parent.template,
+    lastActivity: new Date().toISOString(),
+  };
+  projects.push(workstream);
+  projectStatus[id] = 'cloning';
+  delete projectErrors[id];
+  persist();
+
+  setupWorkstreamRepo(id, parentGit, parent.repo, parent.branch, slug);
+
+  return { ...workstream, status: 'cloning', changes: 0 };
+}
+
+function setupWorkstreamRepo(id, parentGit, repoUrl, baseBranch, slug) {
+  const dataDir = `/data/${id}`;
+  const destDir = gitDir(id);
+  mkdirSync(dataDir, { recursive: true });
+
+  const fail = (message) => {
+    console.error(`[workstream] ${id}: ${message}`);
+    projectStatus[id] = 'error';
+    projectErrors[id] = message;
+  };
+
+  console.log(`[workstream] ${id}: cloning ${parentGit} -> ${destDir}`);
+
+  const step = (args, cwd) => new Promise((resolve) => {
+    execFile('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, stderr: (stderr || err?.message || '').trim() });
+    });
+  });
+
+  (async () => {
+    const clone = await step(['clone', parentGit, destDir], '/data');
+    if (!clone.ok) {
+      fail(`git clone failed: ${clone.stderr.split('\n').filter(Boolean).pop() || 'unknown error'}`);
+      return;
+    }
+
+    // Point at the real upstream so this workstream pushes independently, then
+    // fetch so origin/* refs describe the upstream rather than the parent copy.
+    const setUrl = await step(['remote', 'set-url', 'origin', repoUrl], destDir);
+    if (!setUrl.ok) {
+      fail(`git remote set-url failed: ${setUrl.stderr}`);
+      return;
+    }
+    const fetched = await step(['fetch', 'origin'], destDir);
+    if (!fetched.ok) console.warn(`[workstream] ${id}: fetch failed (continuing): ${fetched.stderr}`);
+
+    // Branch off the upstream base branch when it resolves; otherwise off
+    // whatever the parent had checked out. --no-track matters: without it git
+    // would set the new branch's upstream to origin/<baseBranch>, and a later
+    // `git push` would refuse because the names don't match. Leaving it
+    // unpublished lets syncProject() do `push -u origin HEAD` instead.
+    let branched = await step(['checkout', '-b', slug, '--no-track', `origin/${baseBranch}`], destDir);
+    if (!branched.ok) branched = await step(['checkout', '-b', slug], destDir);
+    if (!branched.ok) {
+      fail(`git checkout -b ${slug} failed: ${branched.stderr}`);
+      return;
+    }
+
+    // Files must be owned by whoever runs podman so the inner container's root maps correctly
+    const owner = `${process.getuid()}:${process.getgid()}`;
+    execFile('chown', ['-R', owner, dataDir], (err) => {
+      if (err) {
+        fail(`chown failed: ${err.message}`);
+        return;
+      }
+      console.log(`[workstream] ${id}: ready on branch ${slug}`);
+      projectStatus[id] = 'idle';
+      delete projectErrors[id];
+      const p = projects.find(p => p.id === id);
+      if (p) {
+        p.lastActivity = new Date().toISOString();
+        persist();
+      }
+    });
+  })();
+}
+
 // Remove a project: drop it from the list and delete its data directory
-// (repo + git working tree). Live sessions/compose/watchers are torn down by
-// the caller in server.js before this runs. Returns null if no such project.
+// (repo + git working tree). Deleting a project also removes its workstreams.
+// Live sessions/compose/watchers are torn down by the caller in server.js
+// before this runs. Returns null if no such project.
 export function deleteProject(id) {
   const idx = projects.findIndex(p => p.id === id);
   if (idx === -1) return null;
-  projects.splice(idx, 1);
-  delete projectStatus[id];
-  delete projectErrors[id];
-  persist();
-  try {
-    rmSync(`/data/${id}`, { recursive: true, force: true });
-  } catch (err) {
-    console.error(`[delete] ${id}: failed to remove data dir: ${err.message}`);
+  const ids = [id, ...childrenOf(id).map(p => p.id)];
+  projects = projects.filter(p => !ids.includes(p.id));
+  for (const target of ids) {
+    delete projectStatus[target];
+    delete projectErrors[target];
   }
-  console.log(`[delete] ${id}: removed`);
+  persist();
+  for (const target of ids) {
+    try {
+      rmSync(`/data/${target}`, { recursive: true, force: true });
+    } catch (err) {
+      console.error(`[delete] ${target}: failed to remove data dir: ${err.message}`);
+    }
+    console.log(`[delete] ${target}: removed`);
+  }
   return { ok: true };
+}
+
+// Ids of a project's workstreams — used by server.js to tear down their live
+// sessions/containers before the project itself is deleted.
+export function getWorkstreamIds(parentId) {
+  return childrenOf(parentId).map(p => p.id);
 }
 
 export async function getChanges(id) {

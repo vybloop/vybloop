@@ -364,6 +364,47 @@ class LoopHomeScreen extends LitElement {
       font-size: 14px;
     }
 
+    /* Workstreams */
+    .ws-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line-soft);
+    }
+    .ws-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--fg-2);
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: 100px;
+      padding: 2px 8px;
+      cursor: pointer;
+      max-width: 100%;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .ws-pill:hover { color: var(--fg-0); border-color: var(--accent); }
+    .ws-pill svg { width: 10px; height: 10px; flex-shrink: 0; }
+    .ws-pill-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ws-pill-count { color: var(--mod); font-weight: 500; }
+    .ws-row td { color: var(--fg-2); }
+    .ws-name {
+      font-weight: 400;
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding-left: 12px;
+    }
+    .ws-indent {
+      display: inline-flex;
+      color: var(--fg-3);
+    }
+    .ws-indent svg { width: 12px; height: 12px; }
+
     /* "..." menu */
     .menu-wrap {
       position: relative;
@@ -526,14 +567,23 @@ class LoopHomeScreen extends LitElement {
     }
   }
 
+  // Only top-level projects are listed; workstreams are rendered as sub-rows
+  // under their parent (see _workstreamsOf).
   _filtered() {
-    if (!this._search.trim()) return this.projects;
+    const roots = this.projects.filter(p => !p.parentId);
+    if (!this._search.trim()) return roots;
     const q = this._search.toLowerCase();
-    return this.projects.filter(p =>
+    const matches = p =>
       p.name.toLowerCase().includes(q) ||
       (p.repo || '').toLowerCase().includes(q) ||
-      (p.description || '').toLowerCase().includes(q)
-    );
+      (p.description || '').toLowerCase().includes(q);
+    // A project stays visible when one of its workstreams matches, so searching
+    // for a workstream name still leads you to it.
+    return roots.filter(p => matches(p) || this._workstreamsOf(p.id).some(ws => ws.workstream.toLowerCase().includes(q)));
+  }
+
+  _workstreamsOf(projectId) {
+    return this.projects.filter(p => p.parentId === projectId);
   }
 
   _glyph(name) {
@@ -576,6 +626,10 @@ class LoopHomeScreen extends LitElement {
     if (project.changes > 0) {
       reasons.push(`has ${project.changes} uncommitted change${project.changes === 1 ? '' : 's'}`);
     }
+    const workstreams = this._workstreamsOf(project.id);
+    if (workstreams.length > 0) {
+      reasons.push(`has ${workstreams.length} workstream${workstreams.length === 1 ? '' : 's'} that will be deleted too`);
+    }
     this._dialog = { type: 'delete-project', project, reasons };
   }
 
@@ -591,7 +645,8 @@ class LoopHomeScreen extends LitElement {
       }
       this._dialog = null;
       this.dispatchEvent(new CustomEvent('project-deleted', {
-        detail: { id: project.id },
+        // We're already on the home screen — no need to navigate.
+        detail: { id: project.id, stay: true },
         bubbles: true,
         composed: true,
       }));
@@ -615,7 +670,7 @@ class LoopHomeScreen extends LitElement {
           <div class="ctx-menu">
             <button class="ctx-menu-item danger" @click=${e => this._openDeleteDialog(e, p)}>
               ${iconTrash}
-              Delete project
+              Delete ${p.parentId ? 'workstream' : 'project'}
             </button>
           </div>
         ` : ''}
@@ -626,14 +681,16 @@ class LoopHomeScreen extends LitElement {
   _renderDeleteDialog() {
     const d = this._dialog;
     if (!d || d.type !== 'delete-project') return '';
-    const name = d.project?.name || 'this project';
+    const isWorkstream = !!d.project?.parentId;
+    const kind = isWorkstream ? 'workstream' : 'project';
+    const name = (isWorkstream ? d.project.workstream : d.project?.name) || `this ${kind}`;
     const hasWarning = d.reasons && d.reasons.length > 0;
     return html`
       <div class="dialog-overlay" @click=${() => { if (!this._deleting) this._dialog = null; }}>
         <div class="dialog-box" @click=${e => e.stopPropagation()}>
-          <div class="dialog-title">Delete project</div>
+          <div class="dialog-title">Delete ${kind}</div>
           <div class="dialog-body">
-            Delete <strong>${name}</strong>? This permanently removes the project and its files from the server.
+            Delete <strong>${name}</strong>? This permanently removes the ${kind} and its files from the server.
             ${hasWarning ? html`
               <div class="dialog-warning">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px">
@@ -641,7 +698,7 @@ class LoopHomeScreen extends LitElement {
                   <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
                 </svg>
                 <div>
-                  This project ${d.reasons.join(' and ')}. Deleting it will permanently lose that work — it cannot be recovered.
+                  This ${kind} ${d.reasons.join(' and ')}. Deleting it will permanently lose that work — it cannot be recovered.
                 </div>
               </div>
             ` : ''}
@@ -650,7 +707,7 @@ class LoopHomeScreen extends LitElement {
           <div class="dialog-actions">
             <button class="dialog-btn" @click=${() => this._dialog = null} ?disabled=${this._deleting}>Cancel</button>
             <button class="dialog-btn dialog-btn-danger" @click=${this._deleteProject} ?disabled=${this._deleting}>
-              ${this._deleting ? 'Deleting…' : 'Delete project'}
+              ${this._deleting ? 'Deleting…' : `Delete ${kind}`}
             </button>
           </div>
         </div>
@@ -665,6 +722,25 @@ class LoopHomeScreen extends LitElement {
       return html`<span class="status-pill error"><span class="static-dot"></span>error</span>`;
     }
     return html`<span class="status-pill idle"><span class="static-dot"></span>idle</span>`;
+  }
+
+  // Workstreams shown under their project — an isolated repo copy + sandbox
+  // per branch, so each is entered on its own.
+  _renderWorkstreamStrip(p) {
+    const workstreams = this._workstreamsOf(p.id);
+    if (workstreams.length === 0) return '';
+    return html`
+      <div class="ws-strip" @click=${e => e.stopPropagation()}>
+        ${workstreams.map(ws => html`
+          <button class="ws-pill" title="Open workstream ${ws.workstream}" @click=${() => this._navigateProject(ws.id)}>
+            ${iconBranch}
+            <span class="ws-pill-name">${ws.workstream}</span>
+            ${ws.status === 'running' ? html`<span class="pulse-dot"></span>` : ''}
+            ${ws.changes > 0 ? html`<span class="ws-pill-count">${ws.changes}</span>` : ''}
+          </button>
+        `)}
+      </div>
+    `;
   }
 
   _renderCard(p) {
@@ -695,6 +771,7 @@ class LoopHomeScreen extends LitElement {
           ${p.changes > 0 ? html`<span class="changes-badge">${p.changes} changes</span>` : ''}
           <span class="last-activity">${this._relativeTime(p.lastActivity)}</span>
         </div>
+        ${this._renderWorkstreamStrip(p)}
       </div>
     `;
   }
@@ -747,6 +824,29 @@ class LoopHomeScreen extends LitElement {
               <td style="color:var(--fg-3)">${this._relativeTime(p.lastActivity)}</td>
               <td class="table-menu-cell">${this._renderMenu(p)}</td>
             </tr>
+            ${this._workstreamsOf(p.id).map(ws => html`
+              <tr class="ws-row" @click=${() => this._navigateProject(ws.id)}>
+                <td>
+                  <div class="table-name ws-name">
+                    <span class="ws-indent">${iconBranch}</span>
+                    ${ws.workstream}
+                  </div>
+                </td>
+                <td>
+                  <span class="branch-chip">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
+                      <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
+                    </svg>
+                    ${ws.branch}
+                  </span>
+                </td>
+                <td>${this._renderStatusPill(ws.status)}</td>
+                <td>${ws.changes > 0 ? html`<span class="changes-badge">${ws.changes} changes</span>` : html`<span style="color:var(--fg-3)">—</span>`}</td>
+                <td style="color:var(--fg-3)">${this._relativeTime(ws.lastActivity)}</td>
+                <td class="table-menu-cell">${this._renderMenu(ws)}</td>
+              </tr>
+            `)}
           `)}
         </tbody>
       </table>
@@ -757,6 +857,7 @@ class LoopHomeScreen extends LitElement {
     const filtered = this._filtered();
     const running = this.projects.filter(p => p.status === 'running').length;
     const changed = this.projects.filter(p => p.changes > 0).length;
+    const workstreams = this.projects.filter(p => p.parentId).length;
 
     return html`
       <loop-top-bar></loop-top-bar>
@@ -765,7 +866,8 @@ class LoopHomeScreen extends LitElement {
           <div class="page-title-group">
             <div class="page-title">Projects</div>
             <div class="page-subtitle">
-              <span>${this.projects.length}</span> total ·
+              <span>${this.projects.filter(p => !p.parentId).length}</span> total ·
+              ${workstreams > 0 ? html`<span>${workstreams}</span> workstream${workstreams === 1 ? '' : 's'} · ` : ''}
               <span>${running}</span> running ·
               <span>${changed}</span> with changes
             </div>
