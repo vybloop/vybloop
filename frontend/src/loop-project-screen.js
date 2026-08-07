@@ -1393,6 +1393,26 @@ class LoopProjectScreen extends LitElement {
       margin: 3px 2px;
     }
 
+    /* Repo link (breadcrumb) */
+    .repo-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 6px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--fg-2);
+      background: var(--bg-3);
+      border: 1px solid var(--line-soft);
+      border-radius: 100px;
+      padding: 1px 8px;
+      text-decoration: none;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .repo-chip:hover { color: var(--fg-0); border-color: var(--accent); }
+    .repo-chip svg { width: 10px; height: 10px; }
+    .repo-chip-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
     /* Workstream switcher (breadcrumb) */
     .ws-chip-wrap { position: relative; display: inline-flex; margin-left: 6px; }
     .ws-chip {
@@ -2250,6 +2270,30 @@ class LoopProjectScreen extends LitElement {
       document.removeEventListener('click', close);
     };
     document.addEventListener('click', close);
+  }
+
+  _renderRepoChip() {
+    const repo = (this.project?.repo || '').trim();
+    if (!repo) return '';
+    // Normalize to a browsable https URL: strip scp-style scheme, credentials and .git suffix.
+    let url = repo.replace(/^git@([^:]+):/, 'https://$1/').replace(/\.git$/, '');
+    if (!/^https?:\/\//.test(url)) url = `https://${url}`;
+    let label = url;
+    try {
+      const u = new URL(url);
+      u.username = '';
+      u.password = '';
+      url = u.toString();
+      label = u.pathname.replace(/^\//, '') || u.hostname;
+    } catch {
+      return '';
+    }
+    return html`
+      <a class="repo-chip" href=${url} target="_blank" rel="noopener noreferrer" title=${url}>
+        ${iconExternal}
+        <span class="repo-chip-name">${label}</span>
+      </a>
+    `;
   }
 
   _renderWorkstreamChip() {
@@ -3721,6 +3765,7 @@ class LoopProjectScreen extends LitElement {
             </svg>
             ${this.project.branch}
           </span>
+          ${this._renderRepoChip()}
         </div>
       </loop-top-bar>
       `}
