@@ -3,7 +3,7 @@ import './loop-top-bar.js';
 import {
   iconArrowLeft, iconPlay, iconStop, iconRefresh,
   iconExternal, iconTerminal, iconSparkle, iconCopy, iconCheck,
-  iconBranch, iconChevron, iconPencil, iconSend, iconMore, iconPlus
+  iconBranch, iconChevron, iconPencil, iconSend, iconMore, iconPlus, iconTrash
 } from './icons.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -103,6 +103,7 @@ class LoopProjectScreen extends LitElement {
     _workstreams: { state: true },
     _wsMenuOpen: { state: true },
     _creatingWorkstream: { state: true },
+    _deletingWorkstream: { state: true },
   };
 
   static styles = [css`
@@ -1491,6 +1492,27 @@ class LoopProjectScreen extends LitElement {
     .ws-menu-check svg { width: 12px; height: 12px; }
     .ws-menu-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ws-menu-hint { margin-left: auto; font-size: 10px; color: var(--fg-3); font-family: var(--font-sans); }
+    /* Row wrapper: the switch button and its delete button are siblings, so the
+       delete button isn't nested inside a button. */
+    .ws-menu-row { display: flex; align-items: center; }
+    .ws-menu-row .ws-menu-item { flex: 1; min-width: 0; }
+    .ws-menu-del {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      padding: 5px 8px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--fg-3);
+      opacity: 0;
+    }
+    .ws-menu-row:hover .ws-menu-del, .ws-menu-del:focus-visible { opacity: 1; }
+    .ws-menu-del:hover { color: var(--del); }
+    .ws-menu-del svg { width: 12px; height: 12px; }
+    .dialog-warning-list { margin: 6px 0 0; padding-left: 18px; }
+    .dialog-warning-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* Dialog text input */
     .dialog-input {
@@ -1573,6 +1595,7 @@ class LoopProjectScreen extends LitElement {
     this._workstreams = [];   // [{ id, workstream, branch, status }] — default first
     this._wsMenuOpen = false;
     this._creatingWorkstream = false;
+    this._deletingWorkstream = false;
     this._connectedProjectId = null;
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileViewStates = new Map();   // path -> IEditorViewState
@@ -2348,6 +2371,91 @@ class LoopProjectScreen extends LitElement {
     return { status: 'error', statusError: 'Timed out waiting for the workstream repository.' };
   }
 
+  _openDeleteWorkstreamDialog(e, ws) {
+    e.stopPropagation();
+    this._wsMenuOpen = false;
+    // impact is filled in asynchronously; the dialog shows "checking…" until then.
+    this._dialog = { type: 'delete-workstream', id: ws.id, name: ws.workstream, impact: null };
+    this._loadDeletionImpact(ws.id);
+  }
+
+  // What deleting this workstream would throw away: commits on no remote, plus
+  // uncommitted files. A failed check is reported as unknown rather than as
+  // "nothing to lose", so we never talk someone into a destructive click.
+  async _loadDeletionImpact(id) {
+    let impact;
+    try {
+      const res = await fetch(`/api/projects/${id}/deletion-impact`);
+      impact = res.ok ? await res.json() : { unknown: true };
+    } catch (e) {
+      console.error('Failed to check for unpushed work', e);
+      impact = { unknown: true };
+    }
+    if (this._dialog?.type === 'delete-workstream' && this._dialog.id === id) {
+      this._dialog = { ...this._dialog, impact };
+    }
+  }
+
+  // The "you are about to lose work" block of the delete dialog. Renders
+  // nothing when everything is already on a remote and the tree is clean.
+  _renderDeletionWarning(impact) {
+    if (!impact) return html`<div class="dialog-body">Checking for unpushed work…</div>`;
+    if (impact.unknown) {
+      return html`<div class="dialog-warning"><div>
+        Couldn't check this workstream for unpushed work. Anything that hasn't been
+        pushed will be lost.
+      </div></div>`;
+    }
+
+    const { commits = 0, uncommittedFiles = 0, subjects = [], hasRemote } = impact;
+    if (commits === 0 && uncommittedFiles === 0) return '';
+
+    const parts = [];
+    if (commits > 0) parts.push(`${commits} commit${commits === 1 ? '' : 's'} that ${commits === 1 ? 'is' : 'are'} not on any remote`);
+    if (uncommittedFiles > 0) parts.push(`${uncommittedFiles} uncommitted file${uncommittedFiles === 1 ? '' : 's'}`);
+
+    return html`
+      <div class="dialog-warning">
+        <div>
+          This workstream has ${parts.join(' and ')}. Deleting it destroys that work
+          permanently.${!hasRemote ? ' It has no remote to push to.' : ''}
+          ${subjects.length > 0 ? html`
+            <ul class="dialog-warning-list">
+              ${subjects.map(s => html`<li>${s}</li>`)}
+              ${commits > subjects.length ? html`<li>…and ${commits - subjects.length} more</li>` : ''}
+            </ul>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  async _deleteWorkstream(id) {
+    if (this._deletingWorkstream) return;
+    this._deletingWorkstream = true;
+    try {
+      const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to delete workstream');
+      }
+      this._dialog = null;
+      const wasCurrent = id === this.project?.id;
+      // `stay` because we navigate ourselves below when needed — falling back to
+      // the home screen would be a surprise when deleting a sibling workstream.
+      this.dispatchEvent(new CustomEvent('project-deleted', {
+        detail: { id, stay: true }, bubbles: true, composed: true,
+      }));
+      if (wasCurrent) this._switchWorkstream(this._parentId);
+      else await this._loadWorkstreams();
+    } catch (e) {
+      console.error('Failed to delete workstream', e);
+      this._dialog = { ...this._dialog, error: e.message };
+    } finally {
+      this._deletingWorkstream = false;
+    }
+  }
+
   _switchWorkstream(id) {
     this._wsMenuOpen = false;
     if (!id || id === this.project?.id) return;
@@ -2408,14 +2516,23 @@ class LoopProjectScreen extends LitElement {
           <div class="ws-menu">
             <div class="ws-menu-label">Workstreams</div>
             ${this._workstreams.map(ws => html`
-              <button
-                class="ws-menu-item ${ws.id === this.project?.id ? 'active' : ''}"
-                @click=${() => this._switchWorkstream(ws.id)}
-              >
-                <span class="ws-menu-check">${ws.id === this.project?.id ? iconCheck : ''}</span>
-                <span class="ws-menu-name">${ws.workstream ?? 'default'}</span>
-                ${ws.status === 'cloning' ? html`<span class="ws-menu-hint">creating…</span>` : ''}
-              </button>
+              <div class="ws-menu-row">
+                <button
+                  class="ws-menu-item ${ws.id === this.project?.id ? 'active' : ''}"
+                  @click=${() => this._switchWorkstream(ws.id)}
+                >
+                  <span class="ws-menu-check">${ws.id === this.project?.id ? iconCheck : ''}</span>
+                  <span class="ws-menu-name">${ws.workstream ?? 'default'}</span>
+                  ${ws.status === 'cloning' ? html`<span class="ws-menu-hint">creating…</span>` : ''}
+                </button>
+                ${ws.workstream ? html`
+                  <button
+                    class="ws-menu-del"
+                    title="Delete workstream ${ws.workstream}"
+                    @click=${e => this._openDeleteWorkstreamDialog(e, ws)}
+                  >${iconTrash}</button>
+                ` : ''}
+              </div>
             `)}
             <div class="ctx-menu-sep"></div>
             <button class="ws-menu-item" @click=${() => this._openCreateWorkstreamDialog()}>
@@ -3033,6 +3150,24 @@ class LoopProjectScreen extends LitElement {
             ?disabled=${!this._dialogInput.trim() || this._creatingWorkstream}
             @click=${submit}
           >${this._creatingWorkstream ? 'Creating…' : 'Create'}</button>
+        </div>
+      `;
+    }
+    if (d.type === 'delete-workstream') {
+      return html`
+        <div class="dialog-title">Delete Workstream</div>
+        <div class="dialog-body">
+          Delete <strong>${d.name}</strong>? This permanently removes its branch,
+          working tree, and sandbox from the server.
+        </div>
+        ${this._renderDeletionWarning(d.impact)}
+        ${d.error ? html`<div class="dialog-error">${d.error}</div>` : ''}
+        <div class="dialog-actions">
+          <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
+          <button class="dialog-btn dialog-btn-danger"
+            ?disabled=${this._deletingWorkstream}
+            @click=${() => this._deleteWorkstream(d.id)}
+          >${this._deletingWorkstream ? 'Deleting…' : 'Delete workstream'}</button>
         </div>
       `;
     }

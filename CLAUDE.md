@@ -52,8 +52,10 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `POST` | `/api/projects/:id/run` | Start or stop the project's compose stack. Requires `docker-compose.yml` in the repo root. Returns `{ status }`. |
 | `POST` | `/api/projects/:id/changes/stage-all` | Stage all changed files. |
 | `POST` | `/api/projects/:id/changes/:fileId/toggle` | Toggle staged/unstaged for a file. |
+| `GET` | `/api/projects/:id/deletion-impact` | Work that deleting this id would destroy: `{ commits, subjects, uncommittedFiles, hasRemote, branch }` (commits reachable from HEAD but from no remote-tracking ref). |
 | `GET` | `/api/projects/:id/workstreams` | List the project's workstreams (default first). |
 | `POST` | `/api/projects/:id/workstreams` | Create a workstream. Body: `{ name }`. Returns 201 with `status: "cloning"`. |
+| `DELETE` | `/api/projects/:id` | Delete a project or workstream (and, for a project, its workstreams). |
 | `GET` | `/api/templates` | List available project templates. |
 | `GET` | `/api/config` | Get config (e.g. `terminalMode`). |
 | `PATCH` | `/api/config` | Update config. |

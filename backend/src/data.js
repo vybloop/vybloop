@@ -310,6 +310,39 @@ async function hasRemote(cwd) {
   return res.ok && !!res.stdout.trim();
 }
 
+// What deleting a project/workstream would destroy for good: commits that are
+// reachable from HEAD but from no remote-tracking ref, plus uncommitted
+// working-tree changes. `--not --remotes` covers both the published branch that
+// is merely ahead of its upstream and the workstream branch that was never
+// pushed at all. With no remotes configured nothing is safe, so every commit
+// counts — `hasRemote` lets the UI say so rather than implying a failed push.
+export async function getDeletionImpact(id) {
+  const p = projects.find(p => p.id === id);
+  if (!p) return null;
+  const cwd = gitDir(id);
+  if (!existsSync(cwd)) {
+    return { commits: 0, subjects: [], uncommittedFiles: 0, hasRemote: false, branch: p.branch };
+  }
+
+  const remote = await hasRemote(cwd);
+  const [log, changes] = await Promise.all([
+    runGitResult(cwd, ['log', '--format=%s', '--max-count=5', 'HEAD', '--not', '--remotes']),
+    countGitChanges(id),
+  ]);
+  const subjects = log.ok ? log.stdout.split('\n').map(s => s.trim()).filter(Boolean) : [];
+  const countRes = log.ok
+    ? await runGitResult(cwd, ['rev-list', '--count', 'HEAD', '--not', '--remotes'])
+    : { ok: false, stdout: '' };
+
+  return {
+    commits: countRes.ok ? parseInt(countRes.stdout.trim(), 10) || 0 : 0,
+    subjects,
+    uncommittedFiles: changes,
+    hasRemote: remote,
+    branch: p.branch,
+  };
+}
+
 // Best-effort base for an unpublished branch: the remote-tracking ref it was
 // branched from. Returns null when nothing usable resolves.
 async function forkPoint(cwd) {

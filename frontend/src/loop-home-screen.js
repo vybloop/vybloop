@@ -631,6 +631,27 @@ class LoopHomeScreen extends LitElement {
       reasons.push(`has ${workstreams.length} workstream${workstreams.length === 1 ? '' : 's'} that will be deleted too`);
     }
     this._dialog = { type: 'delete-project', project, reasons };
+    this._addUnpushedReason(project.id);
+  }
+
+  // Unpushed commits need a git call, so they arrive after the dialog opens and
+  // are folded into the warning then. A failed check stays silent — the generic
+  // "this cannot be recovered" wording already covers it.
+  async _addUnpushedReason(id) {
+    try {
+      const res = await fetch(`/api/projects/${id}/deletion-impact`);
+      if (!res.ok) return;
+      const { commits = 0 } = await res.json();
+      if (commits === 0) return;
+      const d = this._dialog;
+      if (d?.type !== 'delete-project' || d.project?.id !== id) return;
+      this._dialog = {
+        ...d,
+        reasons: [`has ${commits} commit${commits === 1 ? '' : 's'} that ${commits === 1 ? 'is' : 'are'} not on any remote`, ...d.reasons],
+      };
+    } catch (e) {
+      console.warn('Could not check for unpushed work', e);
+    }
   }
 
   async _deleteProject() {

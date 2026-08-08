@@ -24,6 +24,7 @@ import {
   revertFile,
   stageAll,
   getRemoteStatus,
+  getDeletionImpact,
   syncProject,
   getConfig,
   updateConfig,
@@ -339,6 +340,16 @@ app.get('/api/projects/:id/remote-status', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'not found' });
   const status = await getRemoteStatus(req.params.id);
   res.json(status);
+});
+
+// Work that deleting this project/workstream would destroy — commits on no
+// remote, plus uncommitted files. Powers the delete confirmation's warning.
+app.get('/api/projects/:id/deletion-impact', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const impact = await getDeletionImpact(req.params.id);
+  if (!impact) return res.status(404).json({ error: 'not found' });
+  res.json(impact);
 });
 
 app.post('/api/projects/:id/sync', async (req, res) => {
