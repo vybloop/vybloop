@@ -891,6 +891,21 @@ export function createFolder(id, dirPath) {
   }
 }
 
+export function createFile(id, filePath) {
+  const base = gitDir(id);
+  if (!existsSync(base)) return null;
+  const abs = resolve(base, normalize(filePath));
+  if (!abs.startsWith(base + '/')) return { error: 'invalid path' };
+  if (existsSync(abs)) return { error: 'already exists' };
+  try {
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, '', 'utf8');
+    return { ok: true };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
 export function renameItem(id, oldPath, newPath) {
   const base = gitDir(id);
   if (!existsSync(base)) return null;
@@ -898,6 +913,8 @@ export function renameItem(id, oldPath, newPath) {
   const absNew = resolve(base, normalize(newPath));
   if (!absOld.startsWith(base + '/') && absOld !== base) return { error: 'invalid path' };
   if (!absNew.startsWith(base + '/') && absNew !== base) return { error: 'invalid path' };
+  // renameSync silently clobbers an existing target — refuse instead.
+  if (absNew !== absOld && existsSync(absNew)) return { error: 'already exists' };
   try {
     renameSync(absOld, absNew);
     return { ok: true };

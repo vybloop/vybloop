@@ -1383,7 +1383,15 @@ class LoopProjectScreen extends LitElement {
       border-radius: var(--radius-sm);
       cursor: pointer;
       transition: background 0.1s;
-      display: block;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .ctx-menu-key {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-3);
     }
     .ctx-menu-item:hover { background: var(--bg-3); }
     .ctx-menu-item.danger { color: var(--del); }
@@ -1594,6 +1602,15 @@ class LoopProjectScreen extends LitElement {
           e.preventDefault();
           this._saveFile(this._activeTab);
         }
+      }
+      if (e.key === 'F2' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        // Rename the selected tree item — but leave F2 alone while the user is
+        // typing somewhere (Monaco binds it to "rename symbol").
+        if (this._dialog || this._selectedFiles.size !== 1) return;
+        if (this._isTypingTarget()) return;
+        const path = [...this._selectedFiles][0];
+        e.preventDefault();
+        this._openRenameDialog(path, this._isDirPath(path));
       }
     };
     window.addEventListener('keydown', this._searchKeyHandler);
@@ -2076,6 +2093,28 @@ class LoopProjectScreen extends LitElement {
     return result;
   }
 
+  _isDirPath(path, nodes = this._fileTree, parentPath = '') {
+    for (const node of nodes ?? []) {
+      const nodePath = parentPath ? `${parentPath}/${node.name}` : node.name;
+      if (nodePath === path) return node.type === 'dir';
+      if (node.type === 'dir' && path.startsWith(nodePath + '/')) {
+        return this._isDirPath(path, node.children, nodePath);
+      }
+    }
+    return false;
+  }
+
+  // True when focus is in a text field, the editor, or a terminal — anywhere a
+  // key press belongs to that widget rather than to the file tree.
+  _isTypingTarget() {
+    let el = document.activeElement;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    if (!el) return false;
+    if (/^(input|textarea|select)$/i.test(el.tagName)) return true;
+    if (el.isContentEditable) return true;
+    return !!el.closest?.('.monaco-editor, .xterm');
+  }
+
   _filterTopLevelPaths(paths) {
     return paths.filter(p => !paths.some(other => other !== p && p.startsWith(other + '/')));
   }
@@ -2336,6 +2375,13 @@ class LoopProjectScreen extends LitElement {
     requestAnimationFrame(() => this.shadowRoot.querySelector('.dialog-input')?.focus());
   }
 
+  _openCreateFileDialog(parentPath) {
+    this._dialogInput = '';
+    this._dialog = { type: 'create-file', parentPath };
+    this._contextMenu = null;
+    requestAnimationFrame(() => this.shadowRoot.querySelector('.dialog-input')?.focus());
+  }
+
   _openRenameDialog(path, isDir) {
     const name = path.split('/').pop();
     this._dialogInput = name;
@@ -2372,6 +2418,32 @@ class LoopProjectScreen extends LitElement {
     }
   }
 
+  async _createFile(parentPath, name) {
+    const trimmed = name.trim();
+    if (!trimmed || !this.project) return;
+    const filePath = parentPath ? `${parentPath}/${trimmed}` : trimmed;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/fs/touch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath }),
+      });
+      if (res.ok) {
+        this._dialog = null;
+        if (parentPath) this._expandedDirs = new Set([...this._expandedDirs, parentPath]);
+        await this._loadFileTree();
+        this._selectedFiles = new Set([filePath]);
+        this._lastSelectedFile = filePath;
+        this._openFile(filePath);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        this._dialog = { ...this._dialog, error: body.error || 'Failed to create file' };
+      }
+    } catch (e) {
+      console.error('Failed to create file', e);
+    }
+  }
+
   async _renameItem(oldPath, newName, isDir) {
     const trimmed = newName.trim();
     if (!trimmed || !this.project) return;
@@ -2399,6 +2471,9 @@ class LoopProjectScreen extends LitElement {
         }
         await this._loadFileTree();
         this._loadChanges();
+      } else {
+        const body = await res.json().catch(() => ({}));
+        this._dialog = { ...this._dialog, error: body.error || 'Failed to rename' };
       }
     } catch (e) {
       console.error('Failed to rename', e);
@@ -2923,6 +2998,29 @@ class LoopProjectScreen extends LitElement {
         </div>
       `;
     }
+    if (d.type === 'create-file') {
+      const label = d.parentPath ? `inside ${d.parentPath}/` : 'at project root';
+      return html`
+        <div class="dialog-title">New File</div>
+        <div class="dialog-body">Create a new file ${label}.</div>
+        <input
+          class="dialog-input"
+          type="text"
+          placeholder="file-name.js"
+          .value=${this._dialogInput}
+          @input=${e => this._dialogInput = e.target.value}
+          @keydown=${e => { if (e.key === 'Enter') this._createFile(d.parentPath, this._dialogInput); if (e.key === 'Escape') this._dialog = null; }}
+        />
+        ${d.error ? html`<div class="dialog-error">${d.error}</div>` : ''}
+        <div class="dialog-actions">
+          <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
+          <button class="dialog-btn dialog-btn-primary"
+            ?disabled=${!this._dialogInput.trim()}
+            @click=${() => this._createFile(d.parentPath, this._dialogInput)}
+          >Create</button>
+        </div>
+      `;
+    }
     if (d.type === 'rename') {
       const kind = d.isDir ? 'Folder' : 'File';
       return html`
@@ -2934,6 +3032,7 @@ class LoopProjectScreen extends LitElement {
           @input=${e => this._dialogInput = e.target.value}
           @keydown=${e => { if (e.key === 'Enter') this._renameItem(d.path, this._dialogInput, d.isDir); if (e.key === 'Escape') this._dialog = null; }}
         />
+        ${d.error ? html`<div class="dialog-error">${d.error}</div>` : ''}
         <div class="dialog-actions">
           <button class="dialog-btn" @click=${() => this._dialog = null}>Cancel</button>
           <button class="dialog-btn dialog-btn-primary"
@@ -2966,11 +3065,16 @@ class LoopProjectScreen extends LitElement {
     return html`
       <div class="ctx-menu" style="left:${m.x}px;top:${m.y}px" @click=${e => e.stopPropagation()}>
         ${!multiSelected ? html`
+          <button class="ctx-menu-item" @click=${() => this._openCreateFileDialog(fileParent)}>
+            New file${m.isDir ? ' inside' : ' here'}
+          </button>
           <button class="ctx-menu-item" @click=${() => this._openCreateFolderDialog(fileParent)}>
             New folder${m.isDir ? ' inside' : ' here'}
           </button>
           <div class="ctx-menu-sep"></div>
-          <button class="ctx-menu-item" @click=${() => this._openRenameDialog(m.path, m.isDir)}>Rename</button>
+          <button class="ctx-menu-item" @click=${() => this._openRenameDialog(m.path, m.isDir)}>
+            Rename<span class="ctx-menu-key">F2</span>
+          </button>
         ` : ''}
         <button class="ctx-menu-item danger" @click=${() => {
           this._contextMenu = null;

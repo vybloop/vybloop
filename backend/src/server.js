@@ -35,6 +35,7 @@ import {
   getFileDiff,
   uploadFiles,
   createFolder,
+  createFile,
   renameItem,
   deleteItem,
   searchFiles,
@@ -461,6 +462,17 @@ app.post('/api/projects/:id/fs/mkdir', async (req, res) => {
   const { path } = req.body;
   if (!path) return res.status(400).json({ error: 'path is required' });
   const result = createFolder(req.params.id, path);
+  if (!result) return res.status(404).json({ error: 'project not found' });
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/projects/:id/fs/touch', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const { path } = req.body;
+  if (!path) return res.status(400).json({ error: 'path is required' });
+  const result = createFile(req.params.id, path);
   if (!result) return res.status(404).json({ error: 'project not found' });
   if (result.error) return res.status(400).json(result);
   res.json(result);
