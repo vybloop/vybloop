@@ -19,7 +19,11 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 
 ```jsonc
 {
-  "config": { "terminalMode": "direct" },   // "direct" | "tmux"
+  "config": {
+    "terminalMode": "direct",               // "direct" | "tmux"
+    "portRange": "22000-23000",             // host ports Loop hands out
+    "nextPort": 22015                       // cursor for per-project allocation
+  },
   "projects": [
     {
       "id": "quill",                          // URL-safe slug derived from name, unique
@@ -28,6 +32,7 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
       "description": "...",
       "branch": "main",
       "template": "vite-react",
+      "port": 22014,                          // stable HOST_PORT for this project
       "lastActivity": "2026-05-20T13:58:00Z" // ISO 8601 UTC
     }
   ]
@@ -91,7 +96,7 @@ git checkout -b <slug> --no-track origin/<baseBranch>
 
 Deleting a project deletes its workstreams; `server.js` tears down each child's sessions/watchers/logs/containers first, because `destroyProjectSessions(parentId)`'s `startsWith(\`${id}:\`)` filter does not match child session keys.
 
-**Known limitation**: workstreams share the host ports declared in `docker-compose.yml`, so running two at once fails on a port conflict. Dynamic port assignment is future work.
+Workstreams get their own host port automatically (see "Host ports" below), so several can run at once.
 
 ### Terminal system
 
@@ -161,6 +166,19 @@ If the background command fails, status is set to `error` and a `status` SSE eve
 On server startup, `restoreComposeStates()` runs `podman compose ps -q` for each project that has a compose file and restores `running` status for any that have containers already up.
 
 **Frontend** (`frontend/src/loop-project-screen.js`): The Run/Stop button is only rendered when `project.hasCompose` is true. The `status` SSE event (in addition to the fetch response) keeps `_running` in sync if compose fails after the optimistic update.
+
+### Host ports — `HOST_PORT`
+
+Project compose files must never hard-code a host port. They publish through `${HOST_PORT}` (e.g. `- "${HOST_PORT}:8080"`); Loop assigns the value and passes it in the environment of every `podman compose` invocation. The template CLAUDE.md files (`backend/src/templates.js`, shared footer) and the agent's `--append-system-prompt` both instruct Claude Code to write compose files this way.
+
+Allocation lives in `backend/src/data.js`:
+
+- **Default workstream** (a plain project row) — a stable port persisted as `project.port`, allocated from the **bottom** of `config.portRange` via `allocatePort()` (cursor `config.nextPort`, skipping ports already assigned). Assigned at `createProject`, and lazily by `getHostPort()` for rows predating the field or created before the port mattered.
+- **Named workstream** — a dynamic port taken from the **top** of the range, held in the in-memory `workstreamPorts` map (deliberately *not* persisted; it only has to stay stable while the workstream is running, and it is re-derived after a backend restart). Cleared when the workstream is deleted or `portRange` changes.
+
+`composeEnv(id)` wraps `getHostPort(id)` and must be passed to **every** compose call — `up`, `down`, `ps -q`, and `logs -f` (`log-manager.js`) — because compose interpolates the file on each of them, and an unset `HOST_PORT` there would not match the running stack.
+
+Allocation only avoids ports Loop itself knows about; it does not probe the host, so keep `portRange` clear of other listeners.
 
 **Compose provider**: `podman-compose` is installed in the app container (`Dockerfile`). Short image names (e.g. `golang:1.23-alpine`) resolve via `docker.io` thanks to `/etc/containers/registries.conf` set in the `podman-base` image (`podman/Dockerfile`).
 

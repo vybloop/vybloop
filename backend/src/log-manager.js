@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { composeEnv } from './data.js';
 
 const MAX_BYTES = 1024 * 1024; // 1MB rolling window
 
@@ -67,7 +68,7 @@ export function startLogCapture(projectId, repoPath) {
   // Append to existing buffer (build output may already be there)
   const buf = getOrCreateBuffer(projectId);
 
-  const proc = spawn('podman', ['compose', '-p', projectId, 'logs', '-f'], { cwd: repoPath });
+  const proc = spawn('podman', ['compose', '-p', projectId, 'logs', '-f'], { cwd: repoPath, env: composeEnv(projectId) });
   procs.set(projectId, proc);
 
   let pending = '';

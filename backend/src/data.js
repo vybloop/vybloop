@@ -460,15 +460,67 @@ function parsePortRange(range) {
 
 // Hand out the next port within the configured range, advancing (and wrapping)
 // the cursor persisted in the config so each project gets a distinct port.
+// Ports already assigned to a project are skipped so a wrapped cursor doesn't
+// hand out a duplicate.
 function allocatePort() {
   const [start, end] = parsePortRange(config.portRange);
+  const taken = new Set(projects.map(p => p.port).filter(Boolean));
   let port = config.nextPort;
   if (typeof port !== 'number' || port < start || port > end) port = start;
-  let next = port + 1;
-  if (next > end) next = start;
-  config.nextPort = next;
+  for (let i = 0; i <= end - start && taken.has(port); i++) {
+    port = port + 1 > end ? start : port + 1;
+  }
+  config.nextPort = port + 1 > end ? start : port + 1;
   persist();
   return port;
+}
+
+// Host ports handed out to workstreams for the lifetime of this process. These
+// are deliberately not persisted: a workstream's port only has to be stable
+// while it is running, and starting from the top of the range keeps it clear of
+// the per-project ports allocated from the bottom.
+const workstreamPorts = new Map();
+
+// The HOST_PORT a project's compose stack should publish on.
+//
+// - Default workstream (a plain project): the port assigned to the project,
+//   persisted so it stays stable across restarts. Assigned lazily so projects
+//   created before ports existed — and projects cloned from a repo — get one.
+// - Named workstream: a dynamic port taken from the *top* of the range, held in
+//   memory for as long as the process lives so restarts reuse it.
+export function getHostPort(id) {
+  const project = projects.find(p => p.id === id);
+  if (!project) return null;
+
+  if (!project.parentId) {
+    if (!project.port) {
+      project.port = allocatePort();
+      persist();
+    }
+    return project.port;
+  }
+
+  const existing = workstreamPorts.get(id);
+  if (existing) return existing;
+
+  const [start, end] = parsePortRange(config.portRange);
+  const taken = new Set([
+    ...projects.map(p => p.port).filter(Boolean),
+    ...workstreamPorts.values(),
+  ]);
+  let port = end;
+  while (port >= start && taken.has(port)) port--;
+  if (port < start) port = end; // range exhausted — reuse and let compose complain
+  workstreamPorts.set(id, port);
+  return port;
+}
+
+// Environment for any `podman compose` invocation on a project. Project compose
+// files publish on `${HOST_PORT}`, and compose interpolates the file on
+// `down`/`ps`/`logs` too, so every invocation must see the same value as the
+// `up` that started the stack.
+export function composeEnv(id) {
+  return { ...process.env, HOST_PORT: String(getHostPort(id) ?? '') };
 }
 
 // Initialize a fresh project (no repo to clone): create the git directory,
@@ -479,11 +531,8 @@ export function initProject(id, template) {
   const destDir = gitDir(id);
   mkdirSync(destDir, { recursive: true });
 
-  let claudeMd = getTemplateClaudeMd(template);
+  const claudeMd = getTemplateClaudeMd(template);
   if (claudeMd) {
-    if (claudeMd.includes('<PORT_PLACEHOLDER>')) {
-      claudeMd = claudeMd.replaceAll('<PORT_PLACEHOLDER>', String(allocatePort()));
-    }
     writeFileSync(join(destDir, 'CLAUDE.md'), claudeMd, 'utf8');
   }
 
@@ -542,6 +591,9 @@ export function createProject(data) {
     description: '',
     branch: data.branch || 'main',
     template: data.template || 'blank',
+    // Stable host port for the default workstream's compose stack, passed in as
+    // HOST_PORT when the project runs.
+    port: allocatePort(),
     lastActivity: new Date().toISOString(),
   };
   projects.push(project);
@@ -708,6 +760,7 @@ export function deleteProject(id) {
   for (const target of ids) {
     delete projectStatus[target];
     delete projectErrors[target];
+    workstreamPorts.delete(target);
   }
   persist();
   for (const target of ids) {
@@ -870,9 +923,12 @@ export function updateConfig(updates) {
   for (const key of allowed) {
     if (updates[key] !== undefined) config[key] = updates[key];
   }
-  // When the range changes, restart the port cursor at the new range's start.
+  // When the range changes, restart the port cursor at the new range's start
+  // and drop the dynamic workstream ports so they are re-taken from the new
+  // range's top the next time each workstream runs.
   if (config.portRange !== prev.portRange) {
     config.nextPort = parsePortRange(config.portRange)[0];
+    workstreamPorts.clear();
   }
   persist();
   if (config.gitName !== prev.gitName || config.gitEmail !== prev.gitEmail) {

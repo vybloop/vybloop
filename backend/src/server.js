@@ -43,6 +43,7 @@ import {
   createWorkstream,
   listWorkstreams,
   getWorkstreamIds,
+  composeEnv,
 } from './data.js';
 import { listTemplates } from './templates.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
@@ -57,14 +58,14 @@ async function composeDown(projectId, repoPath) {
   // Primary path: compose down handles stop + container removal + pod removal.
   // 3s SIGTERM timeout before SIGKILL keeps shutdown snappy.
   const ok = await execFileAsync('podman', ['compose', '-p', projectId, 'down', '--timeout', '3'], {
-    cwd: repoPath, timeout: 30_000,
+    cwd: repoPath, env: composeEnv(projectId), timeout: 30_000,
   }).then(() => true).catch(() => false);
 
   if (!ok) {
     // Fallback: explicitly remove containers then the pod. This handles the case
     // where compose down is blocked (e.g. a partially-removed pod from a prior crash).
     const { stdout } = await execFileAsync('podman', ['compose', '-p', projectId, 'ps', '-q'], {
-      cwd: repoPath, timeout: 10_000,
+      cwd: repoPath, env: composeEnv(projectId), timeout: 10_000,
     }).catch(() => ({ stdout: '' }));
     const ids = stdout.trim().split('\n').filter(Boolean);
     if (ids.length > 0) {
@@ -75,7 +76,7 @@ async function composeDown(projectId, repoPath) {
 }
 
 async function getContainerPorts(projectId, repoPath) {
-  const { stdout: idsOut } = await execFileAsync('podman', ['compose', '-p', projectId, 'ps', '-q'], { cwd: repoPath });
+  const { stdout: idsOut } = await execFileAsync('podman', ['compose', '-p', projectId, 'ps', '-q'], { cwd: repoPath, env: composeEnv(projectId) });
   const ids = idsOut.trim().split('\n').filter(Boolean);
   const ports = [];
   for (const containerId of ids) {
@@ -235,7 +236,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
       await execFileAsync('podman', ['pod', 'rm', '-f', `pod_${id}`], { timeout: 10_000 }).catch(() => {});
       try {
         await new Promise((resolve, reject) => {
-          const buildProc = spawn('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath });
+          const buildProc = spawn('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath, env: composeEnv(id) });
           let pending = '';
           const onData = (chunk) => {
             pending += chunk.toString();
@@ -291,7 +292,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
   (async () => {
     try {
       await new Promise((resolve, reject) => {
-        const buildProc = spawn('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath });
+        const buildProc = spawn('podman', ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'], { cwd: repoPath, env: composeEnv(id) });
         let pending = '';
         const onData = (chunk) => {
           pending += chunk.toString();
@@ -640,6 +641,7 @@ const SESSION_COMMANDS = {
       'You may freely install any Linux tools or packages you need (e.g. via apt-get, pip, npm, cargo, etc.).',
       'You cannot run Docker or Podman containers directly inside this sandbox.',
       'If the project has a docker-compose.yml at the repo root, instruct the user to start or restart the app using the "Run" or "Restart" button in the Loop UI — do not attempt to run compose yourself.',
+      'Compose files must never hard-code a host port: the host port is assigned automatically and passed in as the HOST_PORT environment variable, so publish ports as "${HOST_PORT}:<container port>".',
     ].join(' '),
   ],
   shell: (repoPath) => [
@@ -810,7 +812,7 @@ async function restoreComposeStates() {
     if (!p.hasCompose) continue;
     const repoPath = `/data/${p.id}/git`;
     try {
-      const { stdout } = await execFileAsync('podman', ['compose', '-p', p.id, 'ps', '-q'], { cwd: repoPath });
+      const { stdout } = await execFileAsync('podman', ['compose', '-p', p.id, 'ps', '-q'], { cwd: repoPath, env: composeEnv(p.id) });
       if (stdout.trim()) {
         setProjectStatus(p.id, 'running');
         notifyProjectStarted(p.id);

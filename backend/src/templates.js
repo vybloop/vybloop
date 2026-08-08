@@ -9,6 +9,22 @@ const SHARED_FOOTER = `
 - Keep changes small and focused; explain non-obvious decisions in code comments.
 - Match the existing style, naming, and structure of the surrounding code.
 - Prefer the project's existing dependencies over adding new ones.
+
+## Host ports
+
+The host port is assigned by Loop and passed in as the \`HOST_PORT\` environment
+variable when the app is started. Never hard-code a host port: a
+\`docker-compose.yml\` must publish through that variable, e.g.
+
+\`\`\`yaml
+services:
+  web:
+    ports:
+      - "\${HOST_PORT}:8080"
+\`\`\`
+
+The container-side port (\`8080\` above) is the project's own choice and can be
+whatever the app listens on. Only the host side comes from \`HOST_PORT\`.
 `;
 
 export const TEMPLATES = [
@@ -62,7 +78,7 @@ Fill in the rest of this section based on the answers in the first section.
 ## File structure
 
 - Dockerfile - configure this to serve the game from a container
-- docker-compose.yml - configure this to serve the game from a container. When creating this file, use port <PORT_PLACEHOLDER> if one has not been selected yet.
+- docker-compose.yml - configure this to serve the game from a container. Publish the host port through the \`\${HOST_PORT}\` environment variable (see "Host ports" below) rather than hard-coding one.
 - frontend/ - should contain front end code
 - backend/ - should contain backend code, if necessary
 
