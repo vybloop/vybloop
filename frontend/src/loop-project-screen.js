@@ -953,13 +953,17 @@ class LoopProjectScreen extends LitElement {
       margin-left: 2px;
     }
 
-    #xterm-container {
+    #xterm-container,
+    #xterm-shell-container {
       flex: 1;
       min-height: 0;
     }
     #xterm-container .xterm,
     #xterm-container .xterm-viewport,
-    #xterm-container .xterm-screen {
+    #xterm-container .xterm-screen,
+    #xterm-shell-container .xterm,
+    #xterm-shell-container .xterm-viewport,
+    #xterm-shell-container .xterm-screen {
       height: 100% !important;
     }
 
@@ -1517,6 +1521,11 @@ class LoopProjectScreen extends LitElement {
     this._term = null;
     this._termFit = null;
     this._termWs = null;
+    // Shell terminal — same sandbox as the agent, created lazily the first time
+    // the shell tab is opened.
+    this._shellTerm = null;
+    this._shellFit = null;
+    this._shellWs = null;
     this._mq = window.matchMedia('(max-width: 768px)');
     this._narrow = this._mq.matches;
     this._inputOpen = false;
@@ -1674,6 +1683,13 @@ class LoopProjectScreen extends LitElement {
       if (this._activeTab === 'agent') {
         requestAnimationFrame(() => this._termFit?.fit());
       }
+      if (this._activeTab === 'shell') {
+        // Created on first activation; reconnected if the socket dropped while
+        // the tab was hidden.
+        if (!this._shellTerm) this._initTerminal('shell');
+        else if (!this._shellWs) this._connectWs('shell');
+        requestAnimationFrame(() => this._shellFit?.fit());
+      }
       if (this._activeTab === 'changes') {
         this._inputOpen = false;
       }
@@ -1722,6 +1738,7 @@ class LoopProjectScreen extends LitElement {
       this._termWs = null;
     }
     this._term?.reset();
+    this._disposeShellTerminal();
     this._logSse?.close();
     this._logSse = null;
     this._logLines = [];
@@ -1779,6 +1796,7 @@ class LoopProjectScreen extends LitElement {
     this._term = null;
     this._termFit = null;
     this._termWs = null;
+    this._disposeShellTerminal();
     clearInterval(this._pollInterval);
     this._pollInterval = null;
     this._fileChangeListeners.forEach(d => d.dispose());
@@ -1801,62 +1819,75 @@ class LoopProjectScreen extends LitElement {
     this._styleObserver = null;
   }
 
-  _initTerminal() {
-    const el = this.shadowRoot.querySelector('#xterm-container');
+  // `kind` is 'agent' | 'shell' — both run in the same per-project sandbox
+  // container and share all the terminal machinery; only the agent terminal
+  // scans its output for claude.com links.
+  _initTerminal(kind = 'agent') {
+    const isAgent = kind === 'agent';
+    const el = this.shadowRoot.querySelector(isAgent ? '#xterm-container' : '#xterm-shell-container');
     if (!el) return;
-    this._term = new Terminal({
+    const term = new Terminal({
       cursorBlink: true,
       scrollback: 5000,
       fontFamily: '"Cascadia Code", ui-monospace, monospace',
       fontSize: 13,
     });
-    this._termFit = new FitAddon();
-    this._term.loadAddon(this._termFit);
-    this._term.open(el);
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(el);
     const webgl = new WebglAddon();
     webgl.onContextLoss(() => webgl.dispose());
-    this._term.loadAddon(webgl);
-    this._termFit.fit();
-    new ResizeObserver(() => this._termFit?.fit()).observe(el);
+    term.loadAddon(webgl);
+    fit.fit();
+    new ResizeObserver(() => fit?.fit()).observe(el);
 
-    this._term.attachCustomKeyEventHandler((e) => {
+    term.attachCustomKeyEventHandler((e) => {
       // ctrl+c with selection: copy to clipboard instead of sending ^C
-      if (e.type === 'keydown' && e.ctrlKey && e.key === 'c' && this._term.hasSelection()) {
-        navigator.clipboard.writeText(this._term.getSelection()).catch(() => {});
+      if (e.type === 'keydown' && e.ctrlKey && e.key === 'c' && term.hasSelection()) {
+        navigator.clipboard.writeText(term.getSelection()).catch(() => {});
         return false;
       }
       // ctrl+v: read from clipboard and paste into terminal
       if (e.type === 'keydown' && e.ctrlKey && e.key === 'v') {
-        navigator.clipboard.readText().then(text => this._term.paste(text)).catch(() => {});
+        navigator.clipboard.readText().then(text => term.paste(text)).catch(() => {});
         return false;
       }
       return true;
     });
 
-    this._connectWs();
+    if (isAgent) { this._term = term; this._termFit = fit; }
+    else { this._shellTerm = term; this._shellFit = fit; }
+
+    this._connectWs(kind);
   }
 
-  _connectWs() {
+  _connectWs(kind = 'agent') {
     if (!this.project) return;
+    const isAgent = kind === 'agent';
+    const term = isAgent ? this._term : this._shellTerm;
+    const fit = isAgent ? this._termFit : this._shellFit;
+    if (!term) return;
+
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/api/projects/${this.project.id}/ws/agent`);
+    const ws = new WebSocket(`${proto}://${location.host}/api/projects/${this.project.id}/ws/${kind}`);
     ws.binaryType = 'arraybuffer';
-    this._termWs = ws;
+    if (isAgent) this._termWs = ws; else this._shellWs = ws;
 
     ws.onopen = () => {
-      this._termFit?.fit();
-      const { cols, rows } = this._term;
+      fit?.fit();
+      const { cols, rows } = term;
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-      
+
       setTimeout(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          this._termFit?.fit();
-          const { cols, rows } = this._term;
+          fit?.fit();
+          const { cols, rows } = term;
           // HACK: Send Ctrl-L then a delayed resize to trigger a redraw on reconnect.
           // The Ctrl-L causes Claude Code to repaint the screen, and the resize nudges
           // the PTY into the correct dimensions after layout settles. A proper fix would
           // require full TTY output record/replay so reconnecting clients see current state.
-          ws.send(JSON.stringify({ type: 'input', data: '\x0c' }));
+          // Not for the shell: there Ctrl-L would just wipe the visible scrollback.
+          if (isAgent) ws.send(JSON.stringify({ type: 'input', data: '\x0c' }));
           ws.send(JSON.stringify({ type: 'resize', cols, rows }));
         }
       }, 1000);
@@ -1864,33 +1895,62 @@ class LoopProjectScreen extends LitElement {
 
     ws.onmessage = ({ data }) => {
       if (data instanceof ArrayBuffer) {
-        this._term.write(new Uint8Array(data));
+        term.write(new Uint8Array(data));
       } else {
-        this._term.write(data);
+        term.write(data);
       }
-      this._scheduleLinkScan();
+      if (isAgent) this._scheduleLinkScan();
     };
 
     ws.onclose = () => {
-      this._termWs = null;
-      this._term?.write('\r\n\x1b[31m[Disconnected — reconnecting…]\x1b[0m\r\n');
-      setTimeout(() => { if (this._term) this._connectWs(); }, 3000);
+      if (isAgent) this._termWs = null; else this._shellWs = null;
+      term.write('\r\n\x1b[31m[Disconnected — reconnecting…]\x1b[0m\r\n');
+      setTimeout(() => {
+        if (isAgent ? this._term : this._shellTerm) this._connectWs(kind);
+      }, 3000);
     };
 
-    this._termDataDisposable?.dispose();
-    this._termResizeDisposable?.dispose();
+    const dataDisposable = isAgent ? this._termDataDisposable : this._shellDataDisposable;
+    const resizeDisposable = isAgent ? this._termResizeDisposable : this._shellResizeDisposable;
+    dataDisposable?.dispose();
+    resizeDisposable?.dispose();
 
-    this._termDataDisposable = this._term.onData(data => {
+    const onData = term.onData(data => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'input', data }));
       }
     });
 
-    this._termResizeDisposable = this._term.onResize(({ cols, rows }) => {
+    const onResize = term.onResize(({ cols, rows }) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', cols, rows }));
       }
     });
+
+    if (isAgent) {
+      this._termDataDisposable = onData;
+      this._termResizeDisposable = onResize;
+    } else {
+      this._shellDataDisposable = onData;
+      this._shellResizeDisposable = onResize;
+    }
+  }
+
+  // Tear down the shell terminal entirely — it is recreated on demand the next
+  // time the tab is opened (and must not outlive a project switch).
+  _disposeShellTerminal() {
+    if (this._shellWs) {
+      this._shellWs.onclose = null;   // don't let the reconnect timer fire
+      this._shellWs.close();
+      this._shellWs = null;
+    }
+    this._shellDataDisposable?.dispose();
+    this._shellDataDisposable = null;
+    this._shellResizeDisposable?.dispose();
+    this._shellResizeDisposable = null;
+    this._shellTerm?.dispose();
+    this._shellTerm = null;
+    this._shellFit = null;
   }
 
   // Watch the terminal screen buffer for claude.com links and surface a
@@ -3274,17 +3334,24 @@ class LoopProjectScreen extends LitElement {
     this.dispatchEvent(new CustomEvent('navigate-home', { bubbles: true, composed: true }));
   }
 
+  // The mobile input bar drives whichever terminal tab is showing.
+  _activeTermWs() {
+    return this._activeTab === 'shell' ? this._shellWs : this._termWs;
+  }
+
   _sendEscape() {
-    if (this._termWs?.readyState === WebSocket.OPEN) {
-      this._termWs.send(JSON.stringify({ type: 'input', data: '\x1b' }));
+    const ws = this._activeTermWs();
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'input', data: '\x1b' }));
     }
   }
 
   _sendMobileInput() {
     const text = this._mobileInput;
     if (!text.trim()) return;
-    if (this._termWs?.readyState === WebSocket.OPEN) {
-      this._termWs.send(JSON.stringify({ type: 'input', data: text + '\r' }));
+    const ws = this._activeTermWs();
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'input', data: text + '\r' }));
     }
     this._mobileInput = '';
     this._inputOpen = false;
@@ -3829,17 +3896,6 @@ class LoopProjectScreen extends LitElement {
     `;
   }
 
-  _renderShellPlaceholder() {
-    return html`
-      <div class="terminal-body" style="font-family:var(--font-mono);font-size:13px">
-        <div style="color:var(--fg-2)"><span style="color:var(--accent)">❯</span> npm run dev</div>
-        <div style="color:var(--fg-3)">  VITE v5.0.0  ready in 340 ms</div>
-        <div style="color:var(--fg-3)">  ➜  Local:   <span style="color:var(--accent)">http://localhost:3000/</span></div>
-        <div style="margin-top:12px;color:var(--fg-2)"><span style="color:var(--accent)">❯</span> <span class="cursor-blink"></span></div>
-      </div>
-    `;
-  }
-
   render() {
     if (!this.project) return html`<div style="padding:40px;color:var(--fg-3)">Loading…</div>`;
 
@@ -3976,7 +4032,9 @@ class LoopProjectScreen extends LitElement {
           <div style="display:${this._activeTab === 'logs' ? 'flex' : 'none'};flex:1;min-height:0">
             ${this._activeTab === 'logs' || this._logSse ? this._renderLogs() : ''}
           </div>
-          ${this._activeTab === 'shell' ? this._renderShellPlaceholder() : ''}
+          <div class="terminal-body" style="display:${this._activeTab === 'shell' ? 'flex' : 'none'};padding:0;overflow:hidden;position:relative">
+            <div id="xterm-shell-container"></div>
+          </div>
           ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
           <div id="monaco-container" style="display:${this._isFilePath(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
           <div id="diff-container" style="display:${this._isDiffTab(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
@@ -4024,7 +4082,9 @@ class LoopProjectScreen extends LitElement {
             >${iconSend}</button>
           </div>
         ` : html`
-          <button class="input-fab input-fab-stop" @click=${this._sendEscape}>${iconStop}</button>
+          ${this._activeTab === 'shell' ? '' : html`
+            <button class="input-fab input-fab-stop" @click=${this._sendEscape}>${iconStop}</button>
+          `}
           <button class="input-fab" @click=${() => this._inputOpen = true}>${iconPencil}</button>
         `}
       ` : ''}
