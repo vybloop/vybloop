@@ -13,15 +13,56 @@ const FALLBACK_TIMEZONES = [
   'Australia/Sydney', 'Pacific/Auckland', 'UTC',
 ];
 
-function timezoneOptions(current) {
-  let zones;
+// Minutes east of UTC for `zone` right now (so the label reflects DST).
+function zoneOffsetMinutes(zone) {
   try {
-    zones = Intl.supportedValuesOf('timeZone');
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'longOffset' })
+      .formatToParts(new Date());
+    const name = parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+    const m = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(name);
+    if (!m) return 0; // plain "GMT" (UTC), or an unexpected format
+    const sign = m[1] === '-' ? -1 : 1;
+    return sign * (Number(m[2]) * 60 + Number(m[3] || 0));
   } catch {
-    zones = FALLBACK_TIMEZONES;
+    return 0;
   }
-  if (current && !zones.includes(current)) zones = [current, ...zones];
-  return zones;
+}
+
+function formatOffset(minutes) {
+  const sign = minutes < 0 ? '-' : '+';
+  const abs = Math.abs(minutes);
+  return `GMT${sign}${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, '0')}`;
+}
+
+// "Europe/Rome" -> "Rome"; "America/Indiana/Knox" -> "Knox, Indiana".
+function zoneCity(zone) {
+  const segments = zone.split('/').map(s => s.replace(/_/g, ' '));
+  if (segments.length === 1) return segments[0];
+  return segments.slice(1).reverse().join(', ');
+}
+
+let cachedOptions = null;
+
+// [{ zone, label }] sorted west-to-east, e.g. "(GMT+1:00) Rome".
+function timezoneOptions(current) {
+  if (!cachedOptions) {
+    let zones;
+    try {
+      zones = Intl.supportedValuesOf('timeZone');
+    } catch {
+      zones = FALLBACK_TIMEZONES;
+    }
+    cachedOptions = zones
+      .map(zone => ({ zone, offset: zoneOffsetMinutes(zone) }))
+      .sort((a, b) => a.offset - b.offset || zoneCity(a.zone).localeCompare(zoneCity(b.zone)))
+      .map(({ zone, offset }) => ({ zone, label: `(${formatOffset(offset)}) ${zoneCity(zone)}` }));
+  }
+  // A zone configured elsewhere must never silently disappear from the picker.
+  if (current && !cachedOptions.some(o => o.zone === current)) {
+    const offset = zoneOffsetMinutes(current);
+    return [{ zone: current, label: `(${formatOffset(offset)}) ${zoneCity(current)}` }, ...cachedOptions];
+  }
+  return cachedOptions;
 }
 
 class LoopTopBar extends LitElement {
@@ -518,7 +559,7 @@ class LoopTopBar extends LitElement {
                     @change=${this._onTimezoneChange}
                   >
                     ${timezoneOptions(this._config.timezone).map(tz => html`
-                      <option value=${tz} ?selected=${tz === (this._config.timezone || DEFAULT_TIMEZONE)}>${tz}</option>
+                      <option value=${tz.zone} ?selected=${tz.zone === (this._config.timezone || DEFAULT_TIMEZONE)}>${tz.label}</option>
                     `)}
                   </select>
                   <div class="config-hint">Used by agents in the sandbox. Applies to new sessions.</div>
