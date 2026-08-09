@@ -5,7 +5,9 @@ FROM ubuntu:24.04
 # the running Node satisfies, so on Node 20 `npm install -g` kept installing
 # 2.1.197 forever and the sandbox never picked up new Claude Code releases —
 # no amount of --no-cache rebuilding could fix that.
-RUN apt-get update && apt-get install -y curl ca-certificates git && \
+# tzdata is needed for the TZ env var (set from Loop's timezone setting) to
+# resolve to a real zone instead of silently falling back to UTC.
+RUN apt-get update && apt-get install -y curl ca-certificates git tzdata && \
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*

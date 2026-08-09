@@ -16,7 +16,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DB_PATH = join(__dirname, '../../data/projects.json');
 
-const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '', portRange: '22000-23000', nextPort: 22000 };
+// `timezone` is an IANA zone name; it is passed to the sandbox containers as TZ
+// so Claude Code (and anything else in there) reports the user's local time.
+const DEFAULT_TIMEZONE = 'America/Los_Angeles';
+const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '', portRange: '22000-23000', nextPort: 22000, timezone: DEFAULT_TIMEZONE };
 const DEFAULT_DB = { projects: [], config: { ...DEFAULT_CONFIG } };
 
 function load() {
@@ -917,8 +920,14 @@ export function getConfig() {
   return rest;
 }
 
+// The effective IANA zone for the sandbox containers. An empty/unset value
+// falls back to the default rather than leaving TZ blank (which would be UTC).
+export function getTimezone() {
+  return config.timezone || DEFAULT_TIMEZONE;
+}
+
 export function updateConfig(updates) {
-  const allowed = ['terminalMode', 'gitName', 'gitEmail', 'portRange'];
+  const allowed = ['terminalMode', 'gitName', 'gitEmail', 'portRange', 'timezone'];
   const prev = { gitName: config.gitName, gitEmail: config.gitEmail, portRange: config.portRange };
   for (const key of allowed) {
     if (updates[key] !== undefined) config[key] = updates[key];

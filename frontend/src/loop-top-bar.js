@@ -1,6 +1,29 @@
 import { LitElement, html, css } from 'lit';
 import { iconMenu } from './icons.js';
 
+const DEFAULT_TIMEZONE = 'America/Los_Angeles';
+
+// Full IANA list where the browser exposes it; otherwise a small common set so
+// the picker is still usable. The saved value is always included (below) so a
+// zone configured elsewhere never silently disappears from the dropdown.
+const FALLBACK_TIMEZONES = [
+  'America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York',
+  'America/Sao_Paulo', 'Europe/London', 'Europe/Berlin', 'Europe/Moscow',
+  'Asia/Dubai', 'Asia/Kolkata', 'Asia/Shanghai', 'Asia/Tokyo',
+  'Australia/Sydney', 'Pacific/Auckland', 'UTC',
+];
+
+function timezoneOptions(current) {
+  let zones;
+  try {
+    zones = Intl.supportedValuesOf('timeZone');
+  } catch {
+    zones = FALLBACK_TIMEZONES;
+  }
+  if (current && !zones.includes(current)) zones = [current, ...zones];
+  return zones;
+}
+
 class LoopTopBar extends LitElement {
   static properties = {
     _configOpen: { state: true },
@@ -167,6 +190,16 @@ class LoopTopBar extends LitElement {
       box-sizing: border-box;
       transition: border-color 0.12s;
     }
+    select.config-input {
+      cursor: pointer;
+      appearance: none;
+      padding-right: 22px;
+      background-image: linear-gradient(45deg, transparent 50%, var(--fg-3) 50%),
+                        linear-gradient(135deg, var(--fg-3) 50%, transparent 50%);
+      background-position: calc(100% - 13px) 50%, calc(100% - 8px) 50%;
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
     .config-input:focus { border-color: var(--accent); }
     .config-input::placeholder { color: var(--fg-3); }
     .config-input:disabled {
@@ -242,7 +275,7 @@ class LoopTopBar extends LitElement {
   constructor() {
     super();
     this._configOpen = false;
-    this._config = { terminalMode: 'direct', gitName: '', gitEmail: '', portRange: '22000-23000' };
+    this._config = { terminalMode: 'direct', gitName: '', gitEmail: '', portRange: '22000-23000', timezone: DEFAULT_TIMEZONE };
     this._github = { mode: 'none', installations: [], pat: { configured: false, fromEnv: false } };
     this._menuOpen = false;
     this._sandboxBusy = '';
@@ -299,6 +332,11 @@ class LoopTopBar extends LitElement {
   _onEmailBlur(e) {
     const val = e.target.value.trim();
     if (val !== this._config.gitEmail) this._patchConfig({ gitEmail: val });
+  }
+
+  _onTimezoneChange(e) {
+    const val = e.target.value;
+    if (val !== this._config.timezone) this._patchConfig({ timezone: val });
   }
 
   _onPortRangeBlur(e) {
@@ -470,6 +508,20 @@ class LoopTopBar extends LitElement {
                       @click=${() => this._setTerminalMode('direct')}
                     >direct</button>
                   </div>
+                </div>
+                <hr class="config-divider" />
+                <div class="config-row">
+                  <div class="config-label">Timezone</div>
+                  <select
+                    class="config-input"
+                    .value=${this._config.timezone || DEFAULT_TIMEZONE}
+                    @change=${this._onTimezoneChange}
+                  >
+                    ${timezoneOptions(this._config.timezone).map(tz => html`
+                      <option value=${tz} ?selected=${tz === (this._config.timezone || DEFAULT_TIMEZONE)}>${tz}</option>
+                    `)}
+                  </select>
+                  <div class="config-hint">Used by agents in the sandbox. Applies to new sessions.</div>
                 </div>
                 <hr class="config-divider" />
                 <div class="config-row">

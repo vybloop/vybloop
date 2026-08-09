@@ -22,7 +22,8 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
   "config": {
     "terminalMode": "direct",               // "direct" | "tmux"
     "portRange": "22000-23000",             // host ports Loop hands out
-    "nextPort": 22015                       // cursor for per-project allocation
+    "nextPort": 22015,                      // cursor for per-project allocation
+    "timezone": "America/Los_Angeles"       // IANA zone; passed to sandboxes as TZ
   },
   "projects": [
     {
@@ -119,6 +120,7 @@ podman run --rm -it \
   --env ANTHROPIC_API_KEY \
   --env IS_SANDBOX=1 \
   --env COLORTERM=truecolor \
+  --env TZ=<config.timezone> \
   --env LOOP_PROJECT_ID=<projectId> \
   -w /project \
   claude-inner claude --dangerously-skip-permissions
