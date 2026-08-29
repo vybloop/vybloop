@@ -2120,9 +2120,10 @@ class LoopProjectScreen extends LitElement {
     }
   }
 
-  _onTreeDrop(e) {
+  _onTreeDrop(e, dirPath) {
     e.preventDefault();
-    const dir = this._dropTargetDir;
+    e.stopPropagation();
+    const dir = dirPath ?? this._dropTargetDir;
     this._dragOverFiles = false;
     this._dropTargetDir = null;
     this._draggingPath = null;
@@ -3638,7 +3639,7 @@ class LoopProjectScreen extends LitElement {
             @dragstart=${(e) => { this._draggingPath = nodePath; e.dataTransfer.setData('text/x-loop-filepath', nodePath); e.dataTransfer.effectAllowed = 'move'; }}
             @dragend=${() => { this._draggingPath = null; this._dropTargetDir = null; }}
             @dragover=${(e) => this._onTreeDragOver(e, nodePath)}
-            @drop=${(e) => this._onTreeDrop(e)}
+            @drop=${(e) => this._onTreeDrop(e, nodePath)}
             @contextmenu=${(e) => this._showContextMenu(e, nodePath, true)}
           >
             <button class="tree-dir-toggle" @click=${(e) => {
@@ -3887,7 +3888,7 @@ class LoopProjectScreen extends LitElement {
               @click=${(e) => { if (e.target === e.currentTarget) this._selectedFiles = new Set(); }}
               @dragover=${(e) => this._onTreeDragOver(e, null)}
               @dragleave=${(e) => this._onTreeDragLeave(e)}
-              @drop=${(e) => this._onTreeDrop(e)}
+              @drop=${(e) => this._onTreeDrop(e, '')}
             >
               ${this._filesLoading ? html`<div class="tree-empty">Loading…</div>` :
                 !this._fileTree || this._fileTree.length === 0
