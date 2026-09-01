@@ -1978,9 +1978,23 @@ class LoopProjectScreen extends LitElement {
 
   // Watch the terminal screen buffer for claude.com links and surface a
   // click helper so the user doesn't have to select/copy/paste them.
+  // The debounce is capped: Claude Code animates a spinner while it waits for
+  // authentication, repainting faster than the 300ms idle window, so a plain
+  // debounce is reset forever and never fires — exactly when a login link is on
+  // screen. Guarantee a scan at least once per second however busy the stream.
   _scheduleLinkScan() {
+    const now = Date.now();
+    if (!this._linkScanDeadline) this._linkScanDeadline = now + 1000;
     clearTimeout(this._linkScanTimer);
-    this._linkScanTimer = setTimeout(() => this._scanForLinks(), 300);
+    if (now >= this._linkScanDeadline) {
+      this._linkScanDeadline = null;
+      this._scanForLinks();
+      return;
+    }
+    this._linkScanTimer = setTimeout(() => {
+      this._linkScanDeadline = null;
+      this._scanForLinks();
+    }, Math.min(300, this._linkScanDeadline - now));
   }
 
   _scanForLinks() {
@@ -1990,6 +2004,24 @@ class LoopProjectScreen extends LitElement {
     // Characters that can legitimately appear inside a URL. Used to decide
     // whether a row that runs to the terminal edge is a wrapped URL.
     const urlChar = /[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]/;
+    // Vertical box-drawing glyphs. Claude Code prints login URLs inside a
+    // bordered box, so a wrapped URL is bracketed by these rather than running
+    // to the terminal edge.
+    const border = '│┃║|';
+
+    // Split a row into its content plus whether that content runs all the way
+    // to the row's right edge — the border for a boxed row, the terminal edge
+    // otherwise. `full` is what marks a row as a candidate wrapped URL.
+    const unbox = (raw) => {
+      const start = raw.length - raw.trimStart().length;
+      const end = raw.trimEnd().length;   // exclusive
+      if (end - start >= 2 && border.includes(raw[start]) && border.includes(raw[end - 1])) {
+        const inner = raw.slice(start + 1, end - 1);
+        // Allow the single space of padding boxes leave before the border.
+        return { text: inner.trim(), full: inner.trimEnd().length >= inner.length - 1 };
+      }
+      return { text: raw.slice(0, end).trim(), full: raw.length >= cols && raw[cols - 1] !== ' ' };
+    };
 
     // Rebuild logical lines. xterm's `isWrapped` flag is unreliable for the way
     // Claude Code emits these links, so we also stitch a row onto the next one
@@ -2001,23 +2033,24 @@ class LoopProjectScreen extends LitElement {
     for (let i = 0; i < buf.length; i++) {
       const line = buf.getLine(i);
       if (!line) continue;
-      const trimmed = line.translateToString(true);
+      // `false` keeps trailing whitespace so we can locate the row's edges.
+      const raw = line.translateToString(false);
+      const { text, full: filledToEdge } = unbox(raw);
       if (continuing) {
-        current += trimmed;
+        current += text;
       } else {
         if (current) lines.push(current);
-        current = trimmed;
+        current = text;
       }
-      // `false` keeps trailing whitespace so we can tell if the row is full.
-      const raw = line.translateToString(false);
-      const filledToEdge = raw.length >= cols && raw[cols - 1] !== ' ';
-      const endsWithUrlChar = trimmed.length > 0 && urlChar.test(trimmed[trimmed.length - 1]);
+      const endsWithUrlChar = text.length > 0 && urlChar.test(text[text.length - 1]);
       const nextWrapped = buf.getLine(i + 1)?.isWrapped;
       continuing = !!nextWrapped || (filledToEdge && endsWithUrlChar);
     }
     if (current) lines.push(current);
 
-    const matches = lines.join('\n').match(/https:\/\/claude\.com[^\s'"`<>]*/g);
+    // Box-drawing glyphs are excluded so an unstitched border can't be absorbed
+    // into the URL, which would silently produce a broken link.
+    const matches = lines.join('\n').match(/https:\/\/claude\.com[^\s'"`<>─-╿]*/g);
     if (!matches || !matches.length) {
       this._claudeLink = null;
       return;
