@@ -104,6 +104,9 @@ class LoopProjectScreen extends LitElement {
     _wsMenuOpen: { state: true },
     _creatingWorkstream: { state: true },
     _deletingWorkstream: { state: true },
+    _sharedImages: { state: true },
+    _sharedPanelOpen: { state: true },
+    _lightbox: { state: true },
   };
 
   static styles = [css`
@@ -120,6 +123,7 @@ class LoopProjectScreen extends LitElement {
       flex: 1;
       min-height: 0;
       overflow: hidden;
+      position: relative;
     }
 
     /* Sidebar */
@@ -853,6 +857,175 @@ class LoopProjectScreen extends LitElement {
       opacity: 0.5;
     }
 
+    /* Shared images panel — screenshots the inner agent pushed to the UI */
+    .shared-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--bg-3);
+      border: 1px solid var(--line-soft);
+      color: var(--fg-2);
+      border-radius: 100px;
+      padding: 3px 9px;
+      margin-right: 8px;
+      cursor: pointer;
+      font-family: var(--font-sans);
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .shared-toggle:hover {
+      color: var(--fg-0);
+      border-color: var(--accent);
+    }
+    .shared-panel {
+      width: 320px;
+      flex-shrink: 0;
+      background: var(--bg-0);
+      border-left: 1px solid var(--line-soft);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .shared-panel-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      flex-shrink: 0;
+    }
+    .shared-panel-title {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--fg-1);
+      letter-spacing: 0.02em;
+    }
+    .shared-panel-action {
+      background: none;
+      border: none;
+      color: var(--fg-3);
+      font-size: 11px;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      padding: 2px 4px;
+      transition: color 0.12s;
+    }
+    .shared-panel-action:hover { color: var(--fg-1); }
+    .shared-panel-close {
+      display: flex;
+      background: none;
+      border: none;
+      color: var(--fg-3);
+      cursor: pointer;
+      padding: 2px;
+      transition: color 0.12s;
+    }
+    .shared-panel-close:hover { color: var(--fg-0); }
+    .shared-panel-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .shared-empty {
+      font-size: 12px;
+      color: var(--fg-3);
+      line-height: 1.6;
+      padding: 8px 2px;
+    }
+    .shared-empty code {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg-2);
+      word-break: break-all;
+    }
+    .shared-card {
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--bg-1);
+      overflow: hidden;
+    }
+    .shared-thumb {
+      display: block;
+      width: 100%;
+      max-height: 220px;
+      object-fit: contain;
+      background: var(--bg-2);
+      cursor: zoom-in;
+    }
+    .shared-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-top: 1px solid var(--line-soft);
+    }
+    .shared-name {
+      flex: 1;
+      min-width: 0;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--fg-2);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .shared-time {
+      font-size: 10px;
+      color: var(--fg-3);
+      flex-shrink: 0;
+    }
+    .shared-del {
+      display: flex;
+      background: none;
+      border: none;
+      color: var(--fg-3);
+      cursor: pointer;
+      padding: 1px;
+      flex-shrink: 0;
+      transition: color 0.12s;
+    }
+    .shared-del:hover { color: var(--del); }
+    .shared-caption {
+      padding: 0 8px 8px;
+      font-size: 12px;
+      color: var(--fg-2);
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      background: oklch(0 0 0 / 0.8);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 32px;
+      z-index: 200;
+      cursor: zoom-out;
+    }
+    .lightbox img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: var(--radius-sm);
+      cursor: default;
+    }
+    .lightbox-caption {
+      font-size: 13px;
+      color: var(--fg-1);
+      max-width: 640px;
+      text-align: center;
+      white-space: pre-wrap;
+    }
+
     /* Terminal placeholder */
     .terminal-body {
       flex: 1;
@@ -1234,6 +1407,16 @@ class LoopProjectScreen extends LitElement {
       .sidebar.as-tab .commit-box {
         padding: 10px;
       }
+      /* No room for a second column on a phone: float the panel over the tab. */
+      .shared-panel {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: min(88vw, 340px);
+        z-index: 60;
+        box-shadow: -8px 0 24px oklch(0 0 0 / 0.35);
+      }
     }
     /* Log view */
     .log-view {
@@ -1596,6 +1779,9 @@ class LoopProjectScreen extends LitElement {
     this._wsMenuOpen = false;
     this._creatingWorkstream = false;
     this._deletingWorkstream = false;
+    this._sharedImages = [];   // [{ file, name, caption, createdAt }] — newest first
+    this._sharedPanelOpen = false;
+    this._lightbox = null;     // null | shared image entry shown full-screen
     this._connectedProjectId = null;
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileViewStates = new Map();   // path -> IEditorViewState
@@ -1665,6 +1851,7 @@ class LoopProjectScreen extends LitElement {
       this._loadChanges();
       this._loadFileTree();
       this._loadWorkstreams();
+      this._loadSharedImages();
       this._connectSse();
       // If project arrived after firstUpdated (e.g. page refresh), #xterm-container
       // wasn't in the DOM yet when firstUpdated ran, so initialize now.
@@ -1776,6 +1963,9 @@ class LoopProjectScreen extends LitElement {
     this._commitError = '';
     this._committed = false;
     this._claudeLink = null;
+    this._sharedImages = [];
+    this._sharedPanelOpen = false;
+    this._lightbox = null;
     this._selectedFiles = new Set();
     this._expandedDirs = new Set();
     this._searchResults = null;
@@ -2733,11 +2923,117 @@ class LoopProjectScreen extends LitElement {
     });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
     this._sse.addEventListener('stale', (e) => { this._stale = JSON.parse(e.data).stale; });
+    this._sse.addEventListener('shared-image', (e) => {
+      const entry = JSON.parse(e.data);
+      this._sharedImages = [entry, ...this._sharedImages.filter(i => i.file !== entry.file)];
+      // A freshly shared image is something the agent wants seen, so pop the
+      // panel open; the user can dismiss it and it stays shut until the next one.
+      this._sharedPanelOpen = true;
+    });
     this._sse.addEventListener('agent-done', () => {
       if (document.visibilityState !== 'visible') {
         document.title = 'Done! — Loop';
       }
     });
+  }
+
+  async _loadSharedImages() {
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}/shared-images`);
+      if (!res.ok) return;
+      this._sharedImages = await res.json();
+    } catch {
+      // panel just stays empty
+    }
+  }
+
+  _sharedImageUrl(entry) {
+    return `/api/projects/${this.project.id}/shared-images/${encodeURIComponent(entry.file)}`;
+  }
+
+  async _deleteSharedImage(entry) {
+    this._sharedImages = this._sharedImages.filter(i => i.file !== entry.file);
+    if (this._lightbox?.file === entry.file) this._lightbox = null;
+    try {
+      await fetch(this._sharedImageUrl(entry), { method: 'DELETE' });
+    } catch { /* already gone from the UI */ }
+  }
+
+  async _clearSharedImages() {
+    this._sharedImages = [];
+    this._lightbox = null;
+    this._sharedPanelOpen = false;
+    try {
+      await fetch(`/api/projects/${this.project.id}/shared-images`, { method: 'DELETE' });
+    } catch { /* already gone from the UI */ }
+  }
+
+  _renderSharedPanel() {
+    if (!this._sharedPanelOpen) return '';
+    return html`
+      <div class="shared-panel">
+        <div class="shared-panel-head">
+          <span class="shared-panel-title">Shared images</span>
+          ${this._sharedImages.length ? html`
+            <button class="shared-panel-action" @click=${this._clearSharedImages} title="Remove all shared images">Clear</button>
+          ` : ''}
+          <button class="shared-panel-close" @click=${() => this._sharedPanelOpen = false} title="Dismiss panel">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div class="shared-panel-body">
+          ${this._sharedImages.length === 0 ? html`
+            <div class="shared-empty">
+              Nothing shared yet. The agent can post a screenshot here with
+              <code>sh /claudeconfig/loop-share-image.sh &lt;file&gt;</code>.
+            </div>
+          ` : this._sharedImages.map(entry => html`
+            <div class="shared-card">
+              <img
+                class="shared-thumb"
+                src=${this._sharedImageUrl(entry)}
+                alt=${entry.name}
+                loading="lazy"
+                @click=${() => this._lightbox = entry}
+              >
+              <div class="shared-meta">
+                <span class="shared-name" title=${entry.name}>${entry.name}</span>
+                <span class="shared-time">${this._formatSharedTime(entry.createdAt)}</span>
+                <button class="shared-del" @click=${() => this._deleteSharedImage(entry)} title="Remove">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+              ${entry.caption ? html`<div class="shared-caption">${entry.caption}</div>` : ''}
+            </div>
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
+  _formatSharedTime(iso) {
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return '';
+    const secs = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (secs < 60) return 'just now';
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+    if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+    return new Date(t).toLocaleDateString();
+  }
+
+  _renderLightbox() {
+    if (!this._lightbox) return '';
+    const entry = this._lightbox;
+    return html`
+      <div class="lightbox" @click=${() => this._lightbox = null}>
+        <img src=${this._sharedImageUrl(entry)} alt=${entry.name} @click=${e => e.stopPropagation()}>
+        ${entry.caption ? html`<div class="lightbox-caption">${entry.caption}</div>` : ''}
+      </div>
+    `;
   }
 
   _connectLogs() {
@@ -4174,6 +4470,14 @@ class LoopProjectScreen extends LitElement {
                 `;
               })}
             </div>
+            ${this._sharedImages.length && !this._sharedPanelOpen ? html`
+              <button class="shared-toggle" @click=${() => this._sharedPanelOpen = true} title="Show shared images">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+                </svg>
+                <span class="count-badge">${this._sharedImages.length}</span>
+              </button>
+            ` : ''}
             <div class="${this._running ? 'connection-chip' : 'connection-chip idle-chip'}">
               <span class="dot"></span>
               ${this._running ? 'connected' : 'idle'}
@@ -4218,7 +4522,11 @@ class LoopProjectScreen extends LitElement {
           ` : ''}
 
         </div>
+
+        ${this._renderSharedPanel()}
       </div>
+
+      ${this._renderLightbox()}
 
       ${this._dialog ? html`
         <div class="dialog-overlay" @click=${() => this._dialog = null}>

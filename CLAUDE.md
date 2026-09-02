@@ -65,6 +65,10 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `GET` | `/api/templates` | List available project templates. |
 | `GET` | `/api/config` | Get config (e.g. `terminalMode`). |
 | `PATCH` | `/api/config` | Update config. |
+| `GET` | `/api/projects/:id/shared-images` | Images the agent shared with the UI, newest first. |
+| `GET` | `/api/projects/:id/shared-images/:file` | Serve one shared image. |
+| `DELETE` | `/api/projects/:id/shared-images/:file` | Remove one shared image. |
+| `DELETE` | `/api/projects/:id/shared-images` | Remove all of a project's shared images. |
 | `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current `claude-inner` image. |
 | `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. Returns `{ version }` — the Claude Code version in the new image. |
 
@@ -143,6 +147,19 @@ A Unix domain socket at `/claudeconfig/loop-events.sock` lets inner containers n
 **Adding new events**: Send a new `event` value from the hook (or any process with access to `/claudeconfig/`), handle it in the `startIpcServer` callback in `server.js`, and broadcast via the SSE helpers in `file-watcher.js`.
 
 **SSE propagation**: `broadcastAgentDone(projectId)` in `file-watcher.js` sends an `agent-done` SSE event to all connected frontend clients for that project. The frontend listens in `_connectSse()` in `loop-project-screen.js`.
+
+### Shared images — `backend/src/shared-images.js`
+
+The inner agent can push an image (a screenshot, a rendered chart) into the web UI. It has no route to the backend's HTTP API, so this rides the same `/claudeconfig` mount as the IPC socket:
+
+1. `installShareTool()` (called from `server.js` at startup, next to the Stop hook) writes `/claudeconfig/loop-share-image.sh`. The agent's `--append-system-prompt` tells it to run `sh /claudeconfig/loop-share-image.sh <image-file> [caption]`.
+2. The script copies the file to `/claudeconfig/shared-images/<projectId>/<timestamp>.<ext>` (rejecting non-image extensions) and sends `{ event: "image-shared", projectId, file, name, caption }` over `loop-events.sock`.
+3. `server.js` calls `recordSharedImage()`, which stamps size/`createdAt` into `/claudeconfig/shared-images/<projectId>/index.json` (newest first, capped at 50 — older images are deleted), then `broadcastSharedImage()` pushes a `shared-image` SSE event.
+4. `loop-project-screen.js` appends the entry to `_sharedImages` and opens the right-hand **Shared images** panel. The panel is dismissable (its `×`); once dismissed a badge next to the connection chip reopens it, and the next shared image pops it open again. Clicking a thumbnail opens a lightbox.
+
+The script is written to `/claudeconfig` rather than baked into `inner-container/Dockerfile` so changes to it need only a backend restart, not a sandbox rebuild. Changing the *system prompt* wording still needs the agent session to respawn (**Restart sandbox**), since it is a `podman run` argument.
+
+Because the store is keyed by the opaque project id, workstreams get their own image list for free. `teardownProject()` calls `clearSharedImages(id)` so deleting a project or workstream drops its images.
 
 ### GitHub authentication — `backend/src/git-auth.js` + `backend/src/git-credential-broker.js`
 

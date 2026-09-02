@@ -47,8 +47,12 @@ import {
   composeEnv,
 } from './data.js';
 import { listTemplates } from './templates.js';
-import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
+import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, broadcastSharedImage, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
+import {
+  installShareTool, recordSharedImage, listSharedImages, getSharedImagePath,
+  deleteSharedImage, clearSharedImages, sharedImageMime,
+} from './shared-images.js';
 import { startCredentialBroker } from './git-credential-broker.js';
 import { getGithubStatus, createRepo, listRepoTargets } from './git-auth.js';
 import { startBuildCapture, startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
@@ -99,6 +103,7 @@ async function teardownProject(id, isRunning) {
   stopLogCapture(id);
   destroyWatcher(id);
   notifyProjectStopped(id);
+  clearSharedImages(id);
   if (isRunning) {
     await composeDown(id, `/data/${id}/git`).catch(() => {});
   }
@@ -444,6 +449,39 @@ app.get('/api/projects/:id/image', async (req, res) => {
   res.send(result.data);
 });
 
+// Images an inner agent shared with the UI via /claudeconfig/loop-share-image.sh.
+app.get('/api/projects/:id/shared-images', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  res.json(listSharedImages(req.params.id));
+});
+
+app.get('/api/projects/:id/shared-images/:file', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const full = getSharedImagePath(req.params.id, req.params.file);
+  if (!full) return res.status(404).json({ error: 'image not found' });
+  res.setHeader('Content-Type', sharedImageMime(req.params.file));
+  res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+  res.sendFile(full);
+});
+
+app.delete('/api/projects/:id/shared-images/:file', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  if (!deleteSharedImage(req.params.id, req.params.file)) {
+    return res.status(400).json({ error: 'bad file name' });
+  }
+  res.json({ ok: true });
+});
+
+app.delete('/api/projects/:id/shared-images', async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  clearSharedImages(req.params.id);
+  res.json({ ok: true });
+});
+
 app.post('/api/projects/:id/upload', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
@@ -644,6 +682,7 @@ const SESSION_COMMANDS = {
       'You cannot run Docker or Podman containers directly inside this sandbox.',
       'If the project has a docker-compose.yml at the repo root, instruct the user to start or restart the app using the "Run" or "Restart" button in the Loop UI — do not attempt to run compose yourself.',
       'Compose files must never hard-code a host port: the host port is assigned automatically and passed in as the HOST_PORT environment variable, so publish ports as "${HOST_PORT}:<container port>".',
+      'To show the user an image or screenshot, run `sh /claudeconfig/loop-share-image.sh <image-file> [caption]` — it appears in a side panel in the Loop UI. Use it whenever a picture explains the result better than text.',
     ].join(' '),
   ],
   shell: (repoPath) => [
@@ -832,7 +871,17 @@ startIpcServer((msg) => {
   if (msg.event === 'agent-done' && msg.projectId) {
     broadcastAgentDone(msg.projectId);
   }
+  if (msg.event === 'image-shared' && msg.projectId) {
+    const entry = recordSharedImage(msg);
+    if (entry) broadcastSharedImage(msg.projectId, entry);
+  }
 });
+
+try {
+  installShareTool();
+} catch (err) {
+  console.error('[shared-images] failed to install share tool:', err.message);
+}
 
 startCredentialBroker();
 

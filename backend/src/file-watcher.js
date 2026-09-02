@@ -127,6 +127,14 @@ export function broadcastAgentDone(projectId) {
   }
 }
 
+export function broadcastSharedImage(projectId, entry) {
+  const watcher = watchers.get(projectId);
+  if (!watcher) return;
+  for (const res of watcher.clients) {
+    sendEvent(res, 'shared-image', entry);
+  }
+}
+
 export function notifyProjectStarted(projectId) {
   runStartTimes.set(projectId, Date.now());
   staleProjects.delete(projectId);
