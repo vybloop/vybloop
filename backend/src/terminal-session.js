@@ -211,7 +211,15 @@ export class DirectSession {
 
   async destroy() {
     this.alive = false;
-    try { this._pty?.kill(); } catch {}
+    // node-pty's kill() defaults to SIGHUP, which `podman run` ignores — the
+    // session looked destroyed while its agent container kept running (and kept
+    // holding the old claude-inner image alive). SIGTERM makes podman stop the
+    // container; SIGKILL is the backstop if it doesn't exit.
+    const proc = this._pty;
+    if (proc) {
+      try { proc.kill('SIGTERM'); } catch {}
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5000).unref?.();
+    }
     for (const ws of this._clients) {
       if (ws.readyState === 1) ws.close();
     }

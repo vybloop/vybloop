@@ -793,8 +793,14 @@ app.post('/api/sandbox/restart', async (req, res) => {
 // Rebuild the sandbox image, then restart sessions so the new image takes effect.
 app.post('/api/sandbox/rebuild', async (req, res) => {
   try {
-    await destroyAllSessions();
+    // Build BEFORE tearing down sessions. The build takes minutes, and the
+    // frontend reconnects its terminal WebSockets the instant a session dies —
+    // destroying first meant every client respawned a container from the *old*
+    // image while the new one was still building, so a "rebuild" appeared to do
+    // nothing. Building first means the sessions killed below can only come
+    // back on the new image.
     const version = await rebuildSandboxImage();
+    await destroyAllSessions();
     res.json({ ok: true, version });
   } catch (err) {
     console.error('Sandbox rebuild failed:', err.message);
