@@ -2912,6 +2912,11 @@ class LoopProjectScreen extends LitElement {
   _connectSse() {
     this._sse?.close();
     this._sse = new EventSource(`/api/projects/${this.project.id}/events`);
+    // EventSource reconnects on its own, and any status/ports event pushed while
+    // it was down is lost — so resync from the API whenever it (re)opens.
+    this._sse.addEventListener('open', () => {
+      this._syncRunState();
+    });
     this._sse.addEventListener('changes', (e) => { this._files = JSON.parse(e.data); });
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
     this._sse.addEventListener('status', (e) => {
@@ -3731,6 +3736,21 @@ class LoopProjectScreen extends LitElement {
       this._running = !this._running;
       this._stopping = false;
     }
+  }
+
+  // Pull authoritative run status + ports from the API. Used when the SSE stream
+  // opens or reopens, so a missed broadcast can't leave the sidebar stale.
+  async _syncRunState() {
+    if (!this.project) return;
+    try {
+      const res = await fetch(`/api/projects/${this.project.id}`);
+      if (!res.ok) return;
+      const project = await res.json();
+      this._running = project.status === 'running';
+      this._stopping = project.status === 'stopping';
+      if (project.status !== 'running') this._stale = false;
+    } catch { /* keep whatever we had */ }
+    if (this._running) this._fetchPorts();
   }
 
   async _fetchPorts() {

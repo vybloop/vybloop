@@ -886,6 +886,10 @@ export function setProjectStatus(id, status) {
   return { status };
 }
 
+export function getProjectStatus(id) {
+  return projectStatus[id] || 'idle';
+}
+
 export function getHasCompose(id) {
   const repoPath = `/data/${id}/git`;
   return ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']

@@ -19,6 +19,7 @@ import {
   getChanges,
   commitChanges,
   setProjectStatus,
+  getProjectStatus,
   getHasCompose,
   toggleStage,
   revertFile,
@@ -94,6 +95,33 @@ async function getContainerPorts(projectId, repoPath) {
     } catch { /* container may have no exposed ports */ }
   }
   return ports;
+}
+
+// Publish a project's port mappings to connected clients. `podman compose up -d`
+// returns before the containers' port mappings are necessarily visible, so a
+// single immediate probe often comes back empty and the UI sits on "starting…"
+// until the user reloads. Poll until a mapping shows up (or we give up), and
+// broadcast every time the answer changes so the UI converges on its own.
+async function publishPorts(projectId, repoPath, { attempts = 20, intervalMs = 1500 } = {}) {
+  let last = null;
+  for (let i = 0; i < attempts; i++) {
+    let ports = [];
+    try {
+      ports = await getContainerPorts(projectId, repoPath);
+    } catch (e) {
+      console.error(`[compose] port detection failed for ${projectId}:`, e.message);
+    }
+    const serialized = JSON.stringify(ports);
+    if (serialized !== last) {
+      last = serialized;
+      broadcastPorts(projectId, ports);
+    }
+    if (ports.length > 0) return ports;
+    // Stop polling if the stack went away (stopped, or the build died).
+    if (getProjectStatus(projectId) !== 'running') return ports;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return [];
 }
 
 // Stop everything live for a project id (a project or one of its workstreams)
@@ -261,12 +289,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
           buildProc.on('error', reject);
         });
         startLogCapture(id, repoPath);
-        try {
-          const ports = await getContainerPorts(id, repoPath);
-          broadcastPorts(id, ports);
-        } catch (e) {
-          console.error(`[compose] port detection failed for ${id}:`, e.message);
-        }
+        publishPorts(id, repoPath);
       } catch (err) {
         console.error(`[compose] up failed for ${id}:`, err.message);
         setProjectStatus(id, 'error');
@@ -317,12 +340,11 @@ app.post('/api/projects/:id/restart', async (req, res) => {
         buildProc.on('error', reject);
       });
       startLogCapture(id, repoPath);
-      try {
-        const ports = await getContainerPorts(id, repoPath);
-        broadcastPorts(id, ports);
-      } catch (e) {
-        console.error(`[compose] port detection failed for ${id}:`, e.message);
-      }
+      // A restart leaves the row 'running', but re-broadcasting clears any build
+      // error the UI is still showing from a previous failed run.
+      setProjectStatus(id, 'running');
+      broadcastStatus(id, 'running');
+      publishPorts(id, repoPath);
     } catch (upErr) {
       console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
       setProjectStatus(id, 'error');
