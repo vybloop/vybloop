@@ -14,6 +14,8 @@ class LoopHomeScreen extends LitElement {
     projects: { type: Array },
     _search: { state: true },
     _viewMode: { state: true },
+    _sortKey: { state: true },
+    _sortDir: { state: true },
     _menuFor: { state: true },
     _dialog: { state: true },
     _deleting: { state: true },
@@ -325,7 +327,24 @@ class LoopHomeScreen extends LitElement {
       letter-spacing: 0.06em;
       padding: 8px 12px;
       border-bottom: 1px solid var(--line-soft);
+      white-space: nowrap;
     }
+    .project-table th.sortable {
+      cursor: pointer;
+      user-select: none;
+      transition: color 0.1s;
+    }
+    .project-table th.sortable:hover { color: var(--fg-1); }
+    .project-table th.sorted { color: var(--fg-0); }
+    .sort-arrow {
+      display: inline-block;
+      margin-left: 4px;
+      font-size: 9px;
+      line-height: 1;
+    }
+    .project-table th.sortable:not(.sorted) .sort-arrow { opacity: 0; }
+    .project-table th.sortable:hover .sort-arrow { opacity: 0.5; }
+    .project-table th.sorted .sort-arrow { opacity: 1; }
     .project-table td {
       padding: 10px 12px;
       border-bottom: 1px solid var(--line-soft);
@@ -541,6 +560,8 @@ class LoopHomeScreen extends LitElement {
     this.projects = [];
     this._search = '';
     this._viewMode = 'grid';
+    this._sortKey = 'lastActivity';   // 'name' | 'status' | 'changes' | 'lastActivity'
+    this._sortDir = 'desc';           // 'asc' | 'desc'
     this._menuFor = null;   // project id whose "..." menu is open
     this._dialog = null;    // null | { type: 'delete-project', project, error }
     this._deleting = false;
@@ -584,6 +605,61 @@ class LoopHomeScreen extends LitElement {
 
   _workstreamsOf(projectId) {
     return this.projects.filter(p => p.parentId === projectId);
+  }
+
+  // Sorting is a view concern only — it reorders top-level rows and, within each
+  // project, its workstream sub-rows (which always stay attached to their parent).
+  static _statusRank = { running: 0, stopping: 1, cloning: 2, error: 3, idle: 4 };
+
+  // Clicking a column sorts by it; clicking the active column flips direction.
+  // Each column starts in its most useful direction (newest / most changes /
+  // running first, but names A→Z).
+  _toggleSort(key) {
+    if (this._sortKey === key) {
+      this._sortDir = this._sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      this._sortKey = key;
+      this._sortDir = (key === 'name' || key === 'status') ? 'asc' : 'desc';
+    }
+  }
+
+  _sortValue(p, key) {
+    switch (key) {
+      case 'name': return (p.workstream || p.name || '').toLowerCase();
+      case 'status': return LoopHomeScreen._statusRank[p.status] ?? 9;
+      case 'changes': return p.changes || 0;
+      case 'lastActivity': {
+        const t = new Date(p.lastActivity).getTime();
+        return Number.isNaN(t) ? 0 : t;
+      }
+      default: return 0;
+    }
+  }
+
+  _sorted(rows) {
+    const key = this._sortKey;
+    const sign = this._sortDir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const va = this._sortValue(a, key);
+      const vb = this._sortValue(b, key);
+      if (va < vb) return -sign;
+      if (va > vb) return sign;
+      // Stable tie-break on name so equal statuses/changes keep a predictable order.
+      const na = (a.workstream || a.name || '').toLowerCase();
+      const nb = (b.workstream || b.name || '').toLowerCase();
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    });
+  }
+
+  _sortHeader(key, label) {
+    const active = this._sortKey === key;
+    return html`
+      <th
+        class="sortable ${active ? 'sorted' : ''}"
+        title="Sort by ${label.toLowerCase()}"
+        @click=${() => this._toggleSort(key)}
+      >${label}<span class="sort-arrow">${active && this._sortDir === 'asc' ? '\u25B2' : '\u25BC'}</span></th>
+    `;
   }
 
   _glyph(name) {
@@ -814,16 +890,16 @@ class LoopHomeScreen extends LitElement {
       <table class="project-table">
         <thead>
           <tr>
-            <th>Name</th>
+            ${this._sortHeader('name', 'Name')}
             <th>Branch</th>
-            <th>Status</th>
-            <th>Changes</th>
-            <th>Last activity</th>
+            ${this._sortHeader('status', 'Status')}
+            ${this._sortHeader('changes', 'Changes')}
+            ${this._sortHeader('lastActivity', 'Last activity')}
             <th></th>
           </tr>
         </thead>
         <tbody>
-          ${filtered.map(p => html`
+          ${this._sorted(filtered).map(p => html`
             <tr @click=${() => this._navigateProject(p.id)}>
               <td>
                 <div class="table-name">
@@ -845,7 +921,7 @@ class LoopHomeScreen extends LitElement {
               <td style="color:var(--fg-3)">${this._relativeTime(p.lastActivity)}</td>
               <td class="table-menu-cell">${this._renderMenu(p)}</td>
             </tr>
-            ${this._workstreamsOf(p.id).map(ws => html`
+            ${this._sorted(this._workstreamsOf(p.id)).map(ws => html`
               <tr class="ws-row" @click=${() => this._navigateProject(ws.id)}>
                 <td>
                   <div class="table-name ws-name">
