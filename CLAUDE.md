@@ -21,6 +21,7 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 {
   "config": {
     "terminalMode": "direct",               // "direct" | "tmux"
+    "agentCli": "claude",                   // "claude" | "codex" — which CLI the agent terminal runs
     "portRange": "22000-23000",             // host ports Loop hands out
     "nextPort": 22015,                      // cursor for per-project allocation
     "timezone": "America/Los_Angeles"       // IANA zone; passed to sandboxes as TZ
@@ -70,7 +71,7 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `DELETE` | `/api/projects/:id/shared-images/:file` | Remove one shared image. |
 | `DELETE` | `/api/projects/:id/shared-images` | Remove all of a project's shared images. |
 | `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current `claude-inner` image. |
-| `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. Returns `{ version }` — the Claude Code version in the new image. |
+| `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. Returns `{ versions: { claude, codex } }` — the agent CLI versions in the new image. |
 
 WebSocket endpoint: `ws://host/api/projects/:id/ws/:type` where `type` is `agent` or `shell`.
 
@@ -114,7 +115,7 @@ The project detail page embeds xterm.js terminals. Each terminal connects over W
 - **`DirectSession`** (default) — spawns the command directly in a node-pty PTY. The process persists across WebSocket disconnects; multiple clients share the same PTY output stream.
 - **`TerminalSession`** (tmux mode) — runs the command inside a named tmux session. Each WebSocket client gets its own grouped tmux session (isolated resize), allowing independent scrollback per client.
 
-**What runs in the terminal**: The `agent` session type runs a Claude Code instance inside a `claude-inner` Podman container:
+**What runs in the terminal**: The `agent` session type runs an agent CLI inside a `claude-inner` Podman container. Which CLI is `config.agentCli` (see "Agent CLI" below); with the default `"claude"`:
 ```
 podman run --rm -it \
   -v <repoPath>:/project \
@@ -130,7 +131,23 @@ podman run --rm -it \
   claude-inner claude --dangerously-skip-permissions
 ```
 
-**Claude Code version in the sandbox**: `inner-container/Dockerfile` installs `@anthropic-ai/claude-code@latest` from npm. Keep its Node version at or above the package's `engines.node` — npm silently installs the newest release whose engines the running Node satisfies rather than failing, so a too-old Node pins the sandbox to an ancient Claude Code that no `--no-cache` rebuild can move (this is what stuck it at 2.1.197: releases from 2.1.198 on require Node ≥22). To update Claude Code, hit **Rebuild sandbox** in the UI (`POST /api/sandbox/rebuild`, `podman build --no-cache`) and check the version it reports back. The endpoint builds *first* and tears down sessions *after*: the frontend reconnects a terminal WebSocket the moment its session dies, so destroying first let clients respawn containers from the old image during the minutes the build was still running — a rebuild that looked like a no-op. For the same reason `DirectSession.destroy()` signals SIGTERM (then SIGKILL), not node-pty's default SIGHUP, which `podman run` ignores and which left orphan agent containers pinned to the old image. `start.sh` only rebuilds when the Dockerfile hash changes, so a restart alone will not pull a newer release.
+**Agent CLI versions in the sandbox**: `inner-container/Dockerfile` installs `@anthropic-ai/claude-code@latest` and `@openai/codex@latest` from npm. Keep its Node version at or above the package's `engines.node` — npm silently installs the newest release whose engines the running Node satisfies rather than failing, so a too-old Node pins the sandbox to an ancient Claude Code that no `--no-cache` rebuild can move (this is what stuck it at 2.1.197: releases from 2.1.198 on require Node ≥22). To update Claude Code, hit **Rebuild sandbox** in the UI (`POST /api/sandbox/rebuild`, `podman build --no-cache`) and check the version it reports back. The endpoint builds *first* and tears down sessions *after*: the frontend reconnects a terminal WebSocket the moment its session dies, so destroying first let clients respawn containers from the old image during the minutes the build was still running — a rebuild that looked like a no-op. For the same reason `DirectSession.destroy()` signals SIGTERM (then SIGKILL), not node-pty's default SIGHUP, which `podman run` ignores and which left orphan agent containers pinned to the old image. `start.sh` only rebuilds when the Dockerfile hash changes, so a restart alone will not pull a newer release.
+
+### Agent CLI — `backend/src/agent-cli.js`
+
+The agent terminal runs either **Claude Code** or **Codex**, switched from the top-bar menu (next to Restart/Rebuild sandbox). Both are installed in the `claude-inner` image, so switching costs nothing but a session restart — `PATCH /api/config { agentCli }` calls `destroyAllSessions('agent')`, and each open terminal reconnects onto the new CLI on its own. Shell sessions are left alone; the selected CLI is global, not per project.
+
+`agent-cli.js` owns everything that differs between them:
+
+| | Claude Code | Codex |
+|---|---|---|
+| command | `claude --dangerously-skip-permissions` | `codex --dangerously-bypass-approvals-and-sandbox` (the container *is* the sandbox) |
+| config dir | `CLAUDE_CONFIG_DIR=/claudeconfig` | `CODEX_HOME=/claudeconfig/codex` |
+| credentials | `ANTHROPIC_API_KEY`, or `/claudeconfig` login | `OPENAI_API_KEY`, or a `codex login` persisted in `CODEX_HOME` |
+| sandbox instructions | `--append-system-prompt` | `$CODEX_HOME/AGENTS.md` (Codex has no such flag) |
+| turn-done notification | `hooks.Stop` in `settings.json` | `notify = [...]` in `$CODEX_HOME/config.toml` |
+
+`AGENT_INSTRUCTIONS` is the single source for the sandbox rules (no nested containers, `${HOST_PORT}`, the share-image script); `installCodexConfig()` writes the Codex-side files at backend startup — like the share tool, so editing them needs only a backend restart, not a sandbox rebuild. Both notification paths run the same `/claudeconfig/loop-notify-done.sh`, so `agent-done` reaches the UI identically. Codex does not read `CLAUDE.md`, which is what the project templates write, so its `AGENTS.md` tells it to fall back to `CLAUDE.md`. `config.toml` is rewritten by replacing just the `notify` line, keeping any hand-added settings — and keeping the key ahead of any `[table]` header, since a bare TOML key after one belongs to that table.
 
 The `shell` session type runs `bash` in the same container. It also mounts `/claudeconfig` and sets `GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig` so the git credential helper works there (see GitHub auth below).
 

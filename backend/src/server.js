@@ -9,6 +9,7 @@ import { promisify } from 'util';
 import { createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { TerminalSession, DirectSession } from './terminal-session.js';
+import { agentCommand, installCodexConfig } from './agent-cli.js';
 import {
   getProjects,
   getProject,
@@ -613,8 +614,13 @@ app.get('/api/config', (req, res) => {
   res.json(getConfig());
 });
 
-app.patch('/api/config', (req, res) => {
+app.patch('/api/config', async (req, res) => {
+  const before = getConfig().agentCli;
   const result = updateConfig(req.body);
+  // Which CLI runs is baked into the container's argv, so a switch only takes
+  // effect once the running agent sessions are gone and respawn. Shells are
+  // left alone — they run bash either way.
+  if (result.agentCli !== before) await destroyAllSessions('agent').catch(() => {});
   res.json(result);
 });
 
@@ -684,29 +690,9 @@ function tmuxName(projectId, type) {
 }
 
 const SESSION_COMMANDS = {
-  agent: (repoPath, projectId) => [
-    'podman', 'run', '--rm', '-it',
-    '-v', `${repoPath}:/project`,
-    '-v', '/claudeconfig:/claudeconfig',
-    '--env', 'CLAUDE_CONFIG_DIR=/claudeconfig',
-    '--env', 'GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig',
-    '--env', 'ANTHROPIC_API_KEY',
-    '--env', 'IS_SANDBOX=1',
-    '--env', 'COLORTERM=truecolor',
-    '--env', `TZ=${getTimezone()}`,
-    '--env', `LOOP_PROJECT_ID=${projectId}`,
-    '-w', '/project',
-    'claude-inner',
-    'claude', '--dangerously-skip-permissions',
-    '--append-system-prompt', [
-      'You are running inside a Linux sandbox container.',
-      'You may freely install any Linux tools or packages you need (e.g. via apt-get, pip, npm, cargo, etc.).',
-      'You cannot run Docker or Podman containers directly inside this sandbox.',
-      'If the project has a docker-compose.yml at the repo root, instruct the user to start or restart the app using the "Run" or "Restart" button in the Loop UI — do not attempt to run compose yourself.',
-      'Compose files must never hard-code a host port: the host port is assigned automatically and passed in as the HOST_PORT environment variable, so publish ports as "${HOST_PORT}:<container port>".',
-      'To show the user an image or screenshot, run `sh /claudeconfig/loop-share-image.sh <image-file> [caption]` — it appears in a side panel in the Loop UI. Use it whenever a picture explains the result better than text.',
-    ].join(' '),
-  ],
+  // The agent command depends on the selected CLI (Claude Code or Codex), so it
+  // is built in agent-cli.js rather than being a fixed argv here.
+  agent: agentCommand,
   shell: (repoPath) => [
     'podman', 'run', '--rm', '-it',
     '-v', `${repoPath}:/project`,
@@ -752,10 +738,11 @@ async function getOrCreateSession(projectId, type, repoPath) {
 // Tear down all live agent/shell sessions (the per-project `claude-inner`
 // containers) so they respawn fresh on the next WebSocket reconnect. Used by the
 // sandbox restart/rebuild endpoints to pick up image or config changes.
-async function destroyAllSessions() {
-  const all = [...sessions.values()];
-  sessions.clear();
-  await Promise.all(all.map(s => s.destroy().catch(() => {})));
+// Pass a session type ('agent' | 'shell' | 'logs') to tear down only those.
+async function destroyAllSessions(type) {
+  const matches = [...sessions.entries()].filter(([key]) => !type || key.endsWith(`:${type}`));
+  for (const [key] of matches) sessions.delete(key);
+  await Promise.all(matches.map(([, s]) => s.destroy().catch(() => {})));
 }
 
 // Destroy just the sessions belonging to one project (agent/shell/logs). The
@@ -784,20 +771,26 @@ async function rebuildSandboxImage() {
     '--label', `dockerfile-hash=${hash}`,
     INNER_CONTAINER_DIR,
   ], { timeout: 600_000 });
-  return await sandboxClaudeVersion();
+  return await sandboxVersions();
 }
 
-// Version of Claude Code baked into the current `claude-inner` image, so the UI
-// can confirm a rebuild actually moved the version forward.
-async function sandboxClaudeVersion() {
-  try {
-    const { stdout } = await execFileAsync('podman', [
-      'run', '--rm', 'claude-inner', 'claude', '--version',
-    ], { timeout: 60_000 });
-    return stdout.trim().split(/\s+/)[0] || null;
-  } catch {
-    return null;
-  }
+// Agent CLI versions baked into the current `claude-inner` image, so the UI can
+// confirm a rebuild actually moved them forward. `claude --version` prints
+// "<version> (Claude Code)" and `codex --version` prints "codex-cli <version>",
+// so take the first token that looks like a version rather than a fixed field.
+async function sandboxVersions() {
+  const read = async (bin) => {
+    try {
+      const { stdout } = await execFileAsync('podman', [
+        'run', '--rm', 'claude-inner', bin, '--version',
+      ], { timeout: 60_000 });
+      return stdout.trim().split(/\s+/).find(t => /^\d+\./.test(t)) || null;
+    } catch {
+      return null;
+    }
+  };
+  const [claude, codex] = await Promise.all([read('claude'), read('codex')]);
+  return { claude, codex };
 }
 
 // Restart the sandbox: kill running sessions so they reconnect with the current
@@ -821,9 +814,9 @@ app.post('/api/sandbox/rebuild', async (req, res) => {
     // image while the new one was still building, so a "rebuild" appeared to do
     // nothing. Building first means the sessions killed below can only come
     // back on the new image.
-    const version = await rebuildSandboxImage();
+    const versions = await rebuildSandboxImage();
     await destroyAllSessions();
-    res.json({ ok: true, version });
+    res.json({ ok: true, versions });
   } catch (err) {
     console.error('Sandbox rebuild failed:', err.message);
     res.status(500).json({ error: err.message });
@@ -909,6 +902,12 @@ try {
   installShareTool();
 } catch (err) {
   console.error('[shared-images] failed to install share tool:', err.message);
+}
+
+try {
+  installCodexConfig();
+} catch (err) {
+  console.error('[agent-cli] failed to install codex config:', err.message);
 }
 
 startCredentialBroker();

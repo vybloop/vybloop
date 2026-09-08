@@ -17,5 +17,11 @@ RUN apt-get update && apt-get install -y curl ca-certificates git tzdata && \
 # above visible at build time.
 RUN npm install -g @anthropic-ai/claude-code@latest && claude --version
 
+# Codex CLI — the alternative agent, selectable from the Loop menu. Its npm
+# package is a thin launcher that execs a prebuilt musl binary from an optional
+# platform dependency, so `codex --version` here also proves that binary got
+# installed rather than failing later inside a user's session.
+RUN npm install -g @openai/codex@latest && codex --version
+
 WORKDIR /project
 CMD ["claude"]

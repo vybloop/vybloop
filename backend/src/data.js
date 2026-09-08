@@ -19,7 +19,10 @@ const DB_PATH = join(__dirname, '../../data/projects.json');
 // `timezone` is an IANA zone name; it is passed to the sandbox containers as TZ
 // so Claude Code (and anything else in there) reports the user's local time.
 const DEFAULT_TIMEZONE = 'America/Los_Angeles';
-const DEFAULT_CONFIG = { terminalMode: 'direct', gitName: '', gitEmail: '', githubPat: '', portRange: '22000-23000', nextPort: 22000, timezone: DEFAULT_TIMEZONE };
+// The agent CLIs the sandbox can run; `config.agentCli` selects one.
+export const AGENT_CLIS = ['claude', 'codex'];
+
+const DEFAULT_CONFIG = { terminalMode: 'direct', agentCli: 'claude', gitName: '', gitEmail: '', githubPat: '', portRange: '22000-23000', nextPort: 22000, timezone: DEFAULT_TIMEZONE };
 const DEFAULT_DB = { projects: [], config: { ...DEFAULT_CONFIG } };
 
 function load() {
@@ -930,12 +933,19 @@ export function getTimezone() {
   return config.timezone || DEFAULT_TIMEZONE;
 }
 
+// Which CLI the `agent` terminal runs. Anything unrecognised falls back to
+// Claude Code so a hand-edited projects.json can't leave the agent unstartable.
+export function getAgentCli() {
+  return AGENT_CLIS.includes(config.agentCli) ? config.agentCli : 'claude';
+}
+
 export function updateConfig(updates) {
-  const allowed = ['terminalMode', 'gitName', 'gitEmail', 'portRange', 'timezone'];
+  const allowed = ['terminalMode', 'agentCli', 'gitName', 'gitEmail', 'portRange', 'timezone'];
   const prev = { gitName: config.gitName, gitEmail: config.gitEmail, portRange: config.portRange };
   for (const key of allowed) {
     if (updates[key] !== undefined) config[key] = updates[key];
   }
+  if (!AGENT_CLIS.includes(config.agentCli)) config.agentCli = 'claude';
   // When the range changes, restart the port cursor at the new range's start
   // and drop the dynamic workstream ports so they are re-taken from the new
   // range's top the next time each workstream runs.

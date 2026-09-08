@@ -146,7 +146,24 @@ class LoopTopBar extends LitElement {
     }
     .menu-popup {
       padding: 6px;
-      min-width: 180px;
+      min-width: 210px;
+    }
+    .menu-section {
+      padding: 4px 10px 8px;
+    }
+    .menu-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--fg-3);
+      margin-bottom: 8px;
+    }
+    .menu-section .config-hint {
+      margin-top: 6px;
+    }
+    .menu-divider {
+      margin: 2px 0 6px;
     }
     .menu-item {
       display: block;
@@ -316,7 +333,7 @@ class LoopTopBar extends LitElement {
   constructor() {
     super();
     this._configOpen = false;
-    this._config = { terminalMode: 'direct', gitName: '', gitEmail: '', portRange: '22000-23000', timezone: DEFAULT_TIMEZONE };
+    this._config = { terminalMode: 'direct', agentCli: 'claude', gitName: '', gitEmail: '', portRange: '22000-23000', timezone: DEFAULT_TIMEZONE };
     this._github = { mode: 'none', installations: [], pat: { configured: false, fromEnv: false } };
     this._menuOpen = false;
     this._sandboxBusy = '';
@@ -363,6 +380,18 @@ class LoopTopBar extends LitElement {
 
   async _setTerminalMode(mode) {
     return this._patchConfig({ terminalMode: mode });
+  }
+
+  // Which CLI the agent terminal runs. The backend tears down the live agent
+  // sessions on this change; each open terminal reconnects on its own and comes
+  // back on the newly selected CLI.
+  get _agentCli() {
+    return this._config.agentCli === 'codex' ? 'codex' : 'claude';
+  }
+
+  async _setAgentCli(cli) {
+    if (cli === this._agentCli) return;
+    return this._patchConfig({ agentCli: cli });
   }
 
   _onNameBlur(e) {
@@ -422,7 +451,10 @@ class LoopTopBar extends LitElement {
       }
       const body = await res.json().catch(() => ({}));
       this._menuOpen = false;
-      if (body.version) alert(`Sandbox rebuilt — Claude Code ${body.version}`);
+      const v = body.versions;
+      if (v) {
+        alert(`Sandbox rebuilt — Claude Code ${v.claude ?? '?'}, Codex ${v.codex ?? '?'}`);
+      }
     } catch (err) {
       alert(`Sandbox ${action} failed: ${err.message}`);
     } finally {
@@ -494,6 +526,21 @@ class LoopTopBar extends LitElement {
             <button class="icon-btn" title="Menu" @click=${this._toggleMenu}>${iconMenu}</button>
             ${this._menuOpen ? html`
               <div class="config-popup menu-popup">
+                <div class="menu-section">
+                  <div class="menu-label">Agent CLI</div>
+                  <div class="segmented">
+                    <button
+                      class="seg-btn ${this._agentCli === 'claude' ? 'active' : ''}"
+                      @click=${() => this._setAgentCli('claude')}
+                    >Claude Code</button>
+                    <button
+                      class="seg-btn ${this._agentCli === 'codex' ? 'active' : ''}"
+                      @click=${() => this._setAgentCli('codex')}
+                    >Codex</button>
+                  </div>
+                  <div class="config-hint">Switching restarts each project's agent terminal.</div>
+                </div>
+                <hr class="config-divider menu-divider" />
                 <button
                   class="menu-item"
                   ?disabled=${!!this._sandboxBusy}
