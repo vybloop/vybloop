@@ -38,6 +38,7 @@ import {
   saveFileContent,
   getFileDiff,
   uploadFiles,
+  uploadFile,
   createFolder,
   createFile,
   renameItem,
@@ -511,6 +512,20 @@ app.post('/api/projects/:id/upload', async (req, res) => {
   const { dir = '', files } = req.body;
   if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: 'files required' });
   const result = uploadFiles(req.params.id, dir, files);
+  if (!result) return res.status(404).json({ error: 'project not found' });
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+// Raw binary upload of a single file: the body is the file itself, so large
+// uploads avoid base64 expansion and a multi-megabyte JSON body.
+app.post('/api/projects/:id/upload-raw', express.raw({ type: '*/*', limit: '1gb' }), async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const name = req.query.name;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  if (!Buffer.isBuffer(req.body)) return res.status(400).json({ error: 'body is required' });
+  const result = uploadFile(req.params.id, req.query.dir ?? '', name, req.body);
   if (!result) return res.status(404).json({ error: 'project not found' });
   if (result.error) return res.status(400).json(result);
   res.json(result);

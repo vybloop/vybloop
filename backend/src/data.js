@@ -966,28 +966,46 @@ export function setGithubPat(pat) {
   persist();
 }
 
-export function uploadFiles(id, dir, files) {
+function resolveUploadDir(id, dir) {
   const base = gitDir(id);
   if (!existsSync(base)) return null;
   const targetDir = dir ? resolve(base, normalize(dir)) : base;
   if (!targetDir.startsWith(base + '/') && targetDir !== base) return { error: 'invalid directory' };
-  const results = [];
-  for (const { name, content } of files) {
-    const safeName = basename(name);
-    if (!safeName || safeName === '.' || safeName === '..') {
-      results.push({ name, ok: false, error: 'invalid filename' });
-      continue;
-    }
-    const filePath = join(targetDir, safeName);
-    try {
-      mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, Buffer.from(content, 'base64'));
-      results.push({ name: safeName, ok: true });
-    } catch (e) {
-      results.push({ name: safeName, ok: false, error: e.message });
-    }
+  return { targetDir };
+}
+
+function writeUpload(targetDir, name, data) {
+  const safeName = basename(name);
+  if (!safeName || safeName === '.' || safeName === '..') {
+    return { name, ok: false, error: 'invalid filename' };
   }
+  const filePath = join(targetDir, safeName);
+  try {
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, data);
+    return { name: safeName, ok: true };
+  } catch (e) {
+    return { name: safeName, ok: false, error: e.message };
+  }
+}
+
+export function uploadFiles(id, dir, files) {
+  const target = resolveUploadDir(id, dir);
+  if (!target) return null;
+  if (target.error) return target;
+  const results = files.map(({ name, content }) =>
+    writeUpload(target.targetDir, name, Buffer.from(content, 'base64')));
   return { ok: true, results };
+}
+
+// Single-file variant for the raw binary upload route: `data` is already a Buffer.
+export function uploadFile(id, dir, name, data) {
+  const target = resolveUploadDir(id, dir);
+  if (!target) return null;
+  if (target.error) return target;
+  const result = writeUpload(target.targetDir, name, data);
+  if (!result.ok) return { error: result.error };
+  return { ok: true, results: [result] };
 }
 
 export function createFolder(id, dirPath) {

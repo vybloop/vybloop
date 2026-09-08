@@ -85,6 +85,7 @@ class LoopProjectScreen extends LitElement {
     _dropTargetDir: { state: true },
     _draggingPath: { state: true },
     _uploading: { state: true },
+    _uploadError: { state: true },
     _selectedFiles: { state: true },
     _lastSelectedFile: { state: true },
     _contextMenu: { state: true },
@@ -496,6 +497,10 @@ class LoopProjectScreen extends LitElement {
       text-align: center;
       color: var(--fg-3);
       font-size: 12px;
+    }
+    .tree-empty.upload-error {
+      color: var(--del);
+      word-break: break-word;
     }
     .file-tree.drag-over {
       background: oklch(0.84 0.18 130 / 0.05);
@@ -1761,6 +1766,7 @@ class LoopProjectScreen extends LitElement {
     this._dropTargetDir = null;
     this._draggingPath = null;
     this._uploading = false;
+    this._uploadError = null;
     this._selectedFiles = new Set();
     this._lastSelectedFile = null;
     this._contextMenu = null;  // null | { x, y, path, isDir }
@@ -2294,26 +2300,34 @@ class LoopProjectScreen extends LitElement {
   async _uploadFiles(files, dirPath) {
     if (!files.length || !this.project) return;
     this._uploading = true;
+    this._uploadError = null;
+    const dir = encodeURIComponent(dirPath ?? '');
     try {
-      const uploads = await Promise.all(Array.from(files).map(async (file) => {
-        const arrayBuffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        const chunk = 8192;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      for (const file of Array.from(files)) {
+        // Send the file as the raw request body: base64 in a JSON body inflates
+        // large files by a third and has to be built as one giant string first.
+        const url = `/api/projects/${this.project.id}/upload-raw`
+          + `?dir=${dir}&name=${encodeURIComponent(file.name)}`;
+        let res;
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: file,
+          });
+        } catch (e) {
+          throw new Error(`${file.name}: ${e.message}`);
         }
-        return { name: file.name, content: btoa(binary) };
-      }));
-      await fetch(`/api/projects/${this.project.id}/upload`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dir: dirPath ?? '', files: uploads }),
-      });
+        if (!res.ok) {
+          const detail = await res.json().catch(() => null);
+          throw new Error(`${file.name}: ${detail?.error || `upload failed (${res.status})`}`);
+        }
+      }
       await this._loadFileTree();
       this._loadChanges();
     } catch (e) {
       console.error('Upload failed', e);
+      this._uploadError = e.message;
     } finally {
       this._uploading = false;
     }
@@ -4260,6 +4274,7 @@ class LoopProjectScreen extends LitElement {
                 </div>
               ` : ''}
               ${this._uploading ? html`<div class="tree-empty">Uploading…</div>` : ''}
+              ${this._uploadError ? html`<div class="tree-empty upload-error">${this._uploadError}</div>` : ''}
             </div>
           ` : ''}
         </div>
