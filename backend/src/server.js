@@ -48,6 +48,8 @@ import {
   listWorkstreams,
   getWorkstreamIds,
   composeEnv,
+  setProjectAgentCli,
+  AGENT_CLIS,
 } from './data.js';
 import { listTemplates } from './templates.js';
 import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, broadcastSharedImage, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
@@ -630,13 +632,26 @@ app.get('/api/config', (req, res) => {
 });
 
 app.patch('/api/config', async (req, res) => {
-  const before = getConfig().agentCli;
-  const result = updateConfig(req.body);
-  // Which CLI runs is baked into the container's argv, so a switch only takes
-  // effect once the running agent sessions are gone and respawn. Shells are
-  // left alone — they run bash either way.
-  if (result.agentCli !== before) await destroyAllSessions('agent').catch(() => {});
-  res.json(result);
+  // `agentCli` here is only the default for projects that have not picked one
+  // of their own; live sessions are deliberately left running, so a switch made
+  // elsewhere never yanks the CLI out from under a working agent. Per-project
+  // switching (with a restart) is POST /api/projects/:id/agent-cli below.
+  res.json(updateConfig(req.body));
+});
+
+// Switch one project (or workstream) to an agent CLI. Only that project's agent
+// session is torn down — it reconnects on the new CLI — so other workstreams
+// keep running whatever they were started with. The pick also becomes the
+// default for projects that have not chosen one.
+app.post('/api/projects/:id/agent-cli', async (req, res) => {
+  const { agentCli } = req.body;
+  if (!AGENT_CLIS.includes(agentCli)) return res.status(400).json({ error: 'unknown agentCli' });
+  if (!setProjectAgentCli(req.params.id, agentCli)) return res.status(404).json({ error: 'not found' });
+  // Which CLI runs is baked into the container's argv, so the switch only takes
+  // effect once this project's agent session is gone and respawns. The shell is
+  // left alone — it runs bash either way.
+  await destroyProjectSessions(req.params.id, 'agent').catch(() => {});
+  res.json({ agentCli });
 });
 
 // GitHub auth status for the settings UI: GitHub App ("app") mode with its
@@ -760,11 +775,12 @@ async function destroyAllSessions(type) {
   await Promise.all(matches.map(([, s]) => s.destroy().catch(() => {})));
 }
 
-// Destroy just the sessions belonging to one project (agent/shell/logs). The
-// `${projectId}:` prefix (with the colon) ensures e.g. "miner" doesn't match
-// "miner-4:agent".
-async function destroyProjectSessions(projectId) {
-  const matches = [...sessions.entries()].filter(([key]) => key.startsWith(`${projectId}:`));
+// Destroy the sessions belonging to one project (agent/shell/logs), or just one
+// type of them. The `${projectId}:` prefix (with the colon) ensures e.g. "miner"
+// doesn't match "miner-4:agent".
+async function destroyProjectSessions(projectId, type) {
+  const matches = [...sessions.entries()].filter(([key]) =>
+    key.startsWith(`${projectId}:`) && (!type || key.endsWith(`:${type}`)));
   for (const [key, session] of matches) {
     sessions.delete(key);
     await session.destroy().catch(() => {});

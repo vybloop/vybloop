@@ -21,7 +21,7 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
 {
   "config": {
     "terminalMode": "direct",               // "direct" | "tmux"
-    "agentCli": "claude",                   // "claude" | "codex" — which CLI the agent terminal runs
+    "agentCli": "claude",                   // "claude" | "codex" — default CLI for projects with no override
     "portRange": "22000-23000",             // host ports Loop hands out
     "nextPort": 22015,                      // cursor for per-project allocation
     "timezone": "America/Los_Angeles"       // IANA zone; passed to sandboxes as TZ
@@ -35,6 +35,7 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
       "branch": "main",
       "template": "vite-react",
       "port": 22014,                          // stable HOST_PORT for this project
+      "agentCli": "codex",                    // optional per-project override of config.agentCli
       "lastActivity": "2026-05-20T13:58:00Z" // ISO 8601 UTC
     }
   ]
@@ -60,6 +61,7 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `POST` | `/api/projects/:id/changes/stage-all` | Stage all changed files. |
 | `POST` | `/api/projects/:id/changes/:fileId/toggle` | Toggle staged/unstaged for a file. |
 | `GET` | `/api/projects/:id/deletion-impact` | Work that deleting this id would destroy: `{ commits, subjects, uncommittedFiles, hasRemote, branch }` (commits reachable from HEAD but from no remote-tracking ref). |
+| `POST` | `/api/projects/:id/agent-cli` | Switch just this project/workstream's agent CLI. Body: `{ agentCli }`. Restarts only its agent session and sets the global default. |
 | `GET` | `/api/projects/:id/workstreams` | List the project's workstreams (default first). |
 | `POST` | `/api/projects/:id/workstreams` | Create a workstream. Body: `{ name }`. Returns 201 with `status: "cloning"`. |
 | `DELETE` | `/api/projects/:id` | Delete a project or workstream (and, for a project, its workstreams). |
@@ -115,7 +117,7 @@ The project detail page embeds xterm.js terminals. Each terminal connects over W
 - **`DirectSession`** (default) — spawns the command directly in a node-pty PTY. The process persists across WebSocket disconnects; multiple clients share the same PTY output stream.
 - **`TerminalSession`** (tmux mode) — runs the command inside a named tmux session. Each WebSocket client gets its own grouped tmux session (isolated resize), allowing independent scrollback per client.
 
-**What runs in the terminal**: The `agent` session type runs an agent CLI inside a `claude-inner` Podman container. Which CLI is `config.agentCli` (see "Agent CLI" below); with the default `"claude"`:
+**What runs in the terminal**: The `agent` session type runs an agent CLI inside a `claude-inner` Podman container. Which CLI is the project's own `agentCli`, else `config.agentCli` (see "Agent CLI" below); with the default `"claude"`:
 ```
 podman run --rm -it \
   -v <repoPath>:/project \
@@ -135,7 +137,14 @@ podman run --rm -it \
 
 ### Agent CLI — `backend/src/agent-cli.js`
 
-The agent terminal runs either **Claude Code** or **Codex**, switched from the top-bar menu (next to Restart/Rebuild sandbox). Both are installed in the `claude-inner` image, so switching costs nothing but a session restart — `PATCH /api/config { agentCli }` calls `destroyAllSessions('agent')`, and each open terminal reconnects onto the new CLI on its own. Shell sessions are left alone; the selected CLI is global, not per project.
+The agent terminal runs either **Claude Code** or **Codex**, switched from the top-bar menu (next to Restart/Rebuild sandbox). Both are installed in the `claude-inner` image, so switching costs nothing but a session restart.
+
+**The choice is per project row**, which means per workstream — two workstreams of the same project can run different CLIs at once. `getAgentCli(id)` in `data.js` returns the row's own `agentCli` if it has one, else `config.agentCli`; a row only gets one when the user picks a CLI while that project is open. `agentCommand()` resolves it at session start, so the CLI is baked into that container's argv for its lifetime.
+
+- `POST /api/projects/:id/agent-cli { agentCli }` — the top-bar switch on a project page. Stamps `agentCli` on the row, makes it `config.agentCli` (the default for rows that never chose), and calls `destroyProjectSessions(id, 'agent')` so **only that** agent terminal restarts; every other sandbox keeps running the CLI it started with. The terminal reconnects on its own.
+- `PATCH /api/config { agentCli }` — the same switch with no project in view (home / new-project screens). Changes the default only and restarts nothing, so a switch made elsewhere never yanks the CLI out from under a working agent.
+
+Shell sessions are left alone either way; they run bash on both.
 
 `agent-cli.js` owns everything that differs between them:
 

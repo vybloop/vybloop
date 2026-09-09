@@ -19,7 +19,8 @@ const DB_PATH = join(__dirname, '../../data/projects.json');
 // `timezone` is an IANA zone name; it is passed to the sandbox containers as TZ
 // so Claude Code (and anything else in there) reports the user's local time.
 const DEFAULT_TIMEZONE = 'America/Los_Angeles';
-// The agent CLIs the sandbox can run; `config.agentCli` selects one.
+// The agent CLIs the sandbox can run. `config.agentCli` is the default; a
+// project row may carry its own `agentCli` that overrides it (see getAgentCli).
 export const AGENT_CLIS = ['claude', 'codex'];
 
 const DEFAULT_CONFIG = { terminalMode: 'direct', agentCli: 'claude', gitName: '', gitEmail: '', githubPat: '', portRange: '22000-23000', nextPort: 22000, timezone: DEFAULT_TIMEZONE };
@@ -561,6 +562,7 @@ export async function getProjects() {
     statusError: projectErrors[p.id],
     changes: counts[i],
     hasCompose: getHasCompose(p.id),
+    agentCli: getAgentCli(p.id),
   }));
 }
 
@@ -574,6 +576,7 @@ export async function getProject(id) {
     statusError: projectErrors[p.id],
     changes,
     hasCompose: getHasCompose(id),
+    agentCli: getAgentCli(id),
   };
 }
 
@@ -933,10 +936,29 @@ export function getTimezone() {
   return config.timezone || DEFAULT_TIMEZONE;
 }
 
-// Which CLI the `agent` terminal runs. Anything unrecognised falls back to
-// Claude Code so a hand-edited projects.json can't leave the agent unstartable.
-export function getAgentCli() {
+// Which CLI the `agent` terminal runs for one project (or, with no id, the
+// global default for projects that have no choice of their own). A project row
+// carries `agentCli` only once the user has picked one for it explicitly, so
+// switching the default never disturbs a workstream that made its own choice.
+// Anything unrecognised falls back to Claude Code so a hand-edited
+// projects.json can't leave the agent unstartable.
+export function getAgentCli(projectId) {
+  const project = projectId ? projects.find(p => p.id === projectId) : null;
+  if (project && AGENT_CLIS.includes(project.agentCli)) return project.agentCli;
   return AGENT_CLIS.includes(config.agentCli) ? config.agentCli : 'claude';
+}
+
+// Pin one project (or workstream) to a CLI, and make it the default for
+// projects that haven't chosen one. Returns the new value, or null if the id or
+// the CLI is unknown.
+export function setProjectAgentCli(id, cli) {
+  if (!AGENT_CLIS.includes(cli)) return null;
+  const project = projects.find(p => p.id === id);
+  if (!project) return null;
+  project.agentCli = cli;
+  config.agentCli = cli;
+  persist();
+  return cli;
 }
 
 export function updateConfig(updates) {

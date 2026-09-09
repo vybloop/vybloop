@@ -3833,6 +3833,12 @@ class LoopProjectScreen extends LitElement {
     this.dispatchEvent(new CustomEvent('navigate-home', { bubbles: true, composed: true }));
   }
 
+  // The top bar switched this project's agent CLI; the backend has already torn
+  // down its agent session and the terminal reconnects on its own.
+  _onAgentCliChanged(e) {
+    this.project = { ...this.project, agentCli: e.detail.agentCli };
+  }
+
   // The mobile input bar drives whichever terminal tab is showing.
   _activeTermWs() {
     return this._activeTab === 'shell' ? this._shellWs : this._termWs;
@@ -4404,7 +4410,7 @@ class LoopProjectScreen extends LitElement {
 
     return html`
       ${this._narrow ? '' : html`
-      <loop-top-bar>
+      <loop-top-bar .project=${this.project} @agent-cli-changed=${this._onAgentCliChanged}>
         <div slot="breadcrumb">
           <button
             style="background:none;border:none;color:var(--fg-3);cursor:pointer;font-size:13px;font-family:var(--font-sans);display:flex;align-items:center;gap:5px;padding:0;transition:color 0.12s"

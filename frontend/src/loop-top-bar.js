@@ -67,7 +67,12 @@ function timezoneOptions(current) {
 
 class LoopTopBar extends LitElement {
   static properties = {
+    // The project (or workstream) the page is showing, when there is one. Its
+    // `agentCli` is what the Agent CLI switch reads and writes; with no project
+    // (home / new-project screens) the switch edits the global default instead.
+    project: { attribute: false },
     _configOpen: { state: true },
+    _pendingCli: { state: true },
     _config: { state: true },
     _github: { state: true },
     _menuOpen: { state: true },
@@ -337,6 +342,9 @@ class LoopTopBar extends LitElement {
     this._github = { mode: 'none', installations: [], pat: { configured: false, fromEnv: false } };
     this._menuOpen = false;
     this._sandboxBusy = '';
+    // Optimistic per-project pick, so the switch flips immediately instead of
+    // waiting for the parent screen to refetch the project.
+    this._pendingCli = null;
     this._loadConfig();
   }
 
@@ -382,16 +390,38 @@ class LoopTopBar extends LitElement {
     return this._patchConfig({ terminalMode: mode });
   }
 
-  // Which CLI the agent terminal runs. The backend tears down the live agent
-  // sessions on this change; each open terminal reconnects on its own and comes
-  // back on the newly selected CLI.
+  // Which CLI the agent terminal runs — for this project when the page has one,
+  // otherwise the default new projects start on.
   get _agentCli() {
-    return this._config.agentCli === 'codex' ? 'codex' : 'claude';
+    const value = this.project
+      ? (this._pendingCli?.id === this.project.id ? this._pendingCli.cli : this.project.agentCli)
+      : this._config.agentCli;
+    return value === 'codex' ? 'codex' : 'claude';
   }
 
+  // With a project in view, only that project's agent session is restarted —
+  // other projects and workstreams keep running the CLI they started with. The
+  // pick also becomes the default for projects that have not chosen one.
   async _setAgentCli(cli) {
     if (cli === this._agentCli) return;
-    return this._patchConfig({ agentCli: cli });
+    if (!this.project) return this._patchConfig({ agentCli: cli });
+
+    const id = this.project.id;
+    this._pendingCli = { id, cli };
+    try {
+      const res = await fetch(`/api/projects/${id}/agent-cli`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentCli: cli }),
+      });
+      if (!res.ok) throw new Error('failed');
+      this._config = { ...this._config, agentCli: cli };
+      this.dispatchEvent(new CustomEvent('agent-cli-changed', {
+        detail: { id, agentCli: cli }, bubbles: true, composed: true,
+      }));
+    } catch {
+      this._pendingCli = null;
+    }
   }
 
   _onNameBlur(e) {
@@ -538,7 +568,9 @@ class LoopTopBar extends LitElement {
                       @click=${() => this._setAgentCli('codex')}
                     >Codex</button>
                   </div>
-                  <div class="config-hint">Switching restarts each project's agent terminal.</div>
+                  <div class="config-hint">${this.project
+                    ? 'Applies to this workstream — its agent terminal restarts, others keep running their own CLI.'
+                    : 'The CLI new projects start on.'}</div>
                 </div>
                 <hr class="config-divider menu-divider" />
                 <button

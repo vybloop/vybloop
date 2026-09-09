@@ -61,9 +61,11 @@ const AGENT_COMMANDS = {
   ],
 };
 
-// The `podman run` argv for the agent terminal, for whichever CLI is selected.
+// The `podman run` argv for the agent terminal, for whichever CLI this project
+// is set to (its own choice, else the global default). Resolved per session
+// start, so two workstreams of the same project can run different CLIs.
 export function agentCommand(repoPath, projectId) {
-  return AGENT_COMMANDS[getAgentCli()](repoPath, projectId);
+  return AGENT_COMMANDS[getAgentCli(projectId)](repoPath, projectId);
 }
 
 // Codex's counterpart to the Claude Code Stop hook + system prompt installed in
