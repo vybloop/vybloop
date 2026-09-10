@@ -34,7 +34,6 @@ class LoopApp extends LitElement {
     this._route = 'home';
     this._projectId = null;
     this._projects = [];
-    this._projectSse = null;
     this._onPopState = this._onPopState.bind(this);
   }
 
@@ -44,6 +43,14 @@ class LoopApp extends LitElement {
     this._applyLocation(window.location, false);
     window.addEventListener('popstate', this._onPopState);
 
+    // The project screen relays status/compose off its own /events stream.
+    // Opening a second EventSource on the same endpoint here cost a permanent
+    // slot in the browser's six-connections-per-origin budget for no new data,
+    // which is what left shared images stuck "loading" until a refresh.
+    this.addEventListener('project-runtime', (e) => {
+      const { id, ...patch } = e.detail;
+      this._projects = this._projects.map(p => p.id === id ? { ...p, ...patch } : p);
+    });
     this.addEventListener('navigate-new', () => this._navigate('new', null));
     this.addEventListener('navigate-home', () => this._navigate('home', null));
     this.addEventListener('navigate-project', (e) => this._navigate('project', e.detail.id));
@@ -62,23 +69,6 @@ class LoopApp extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     window.removeEventListener('popstate', this._onPopState);
-    this._projectSse?.close();
-    this._projectSse = null;
-  }
-
-  _connectProjectSse(projectId) {
-    this._projectSse?.close();
-    this._projectSse = null;
-    if (!projectId) return;
-    this._projectSse = new EventSource(`/api/projects/${projectId}/events`);
-    this._projectSse.addEventListener('status', (e) => {
-      const { status } = JSON.parse(e.data);
-      this._projects = this._projects.map(p => p.id === projectId ? { ...p, status } : p);
-    });
-    this._projectSse.addEventListener('compose', (e) => {
-      const { hasCompose } = JSON.parse(e.data);
-      this._projects = this._projects.map(p => p.id === projectId ? { ...p, hasCompose } : p);
-    });
   }
 
   _applyLocation(location, push) {
@@ -102,10 +92,6 @@ class LoopApp extends LitElement {
     this._projectId = projectId;
     if (route === 'project' && projectId) {
       this._fetchProject(projectId);
-      this._connectProjectSse(projectId);
-    } else {
-      this._projectSse?.close();
-      this._projectSse = null;
     }
   }
 
@@ -128,10 +114,6 @@ class LoopApp extends LitElement {
     this._projectId = projectId;
     if (route === 'project' && projectId) {
       this._fetchProject(projectId);
-      this._connectProjectSse(projectId);
-    } else {
-      this._projectSse?.close();
-      this._projectSse = null;
     }
   }
 

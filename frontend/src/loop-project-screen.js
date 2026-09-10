@@ -1761,6 +1761,7 @@ class LoopProjectScreen extends LitElement {
     this._logAutoScroll = true;
     this._logUpdated = false;
     this._logSse = null;
+    this._logReconnectTimer = null;
     this._logEmpty = true;
     this._dragOverFiles = false;
     this._dropTargetDir = null;
@@ -1850,15 +1851,23 @@ class LoopProjectScreen extends LitElement {
       // keyed on the project id, so drop the old connections and state first.
       const switched = this._connectedProjectId !== null && this._connectedProjectId !== this.project.id;
       if (switched) this._resetForProjectSwitch();
+      // `project` is re-set (as a fresh object) whenever the app re-fetches it
+      // or a runtime event updates its row, but only a *different id* needs the
+      // connections rebuilt. Reconnecting the SSE on every such update churned
+      // through the browser's 6-connections-per-origin budget and left image
+      // requests queued behind half-torn-down streams.
+      const reconnect = this._connectedProjectId !== this.project.id;
       this._connectedProjectId = this.project.id;
 
       this._running = this.project.status === 'running';
       this._stopping = this.project.status === 'stopping';
-      this._loadChanges();
-      this._loadFileTree();
-      this._loadWorkstreams();
-      this._loadSharedImages();
-      this._connectSse();
+      if (reconnect) {
+        this._loadChanges();
+        this._loadFileTree();
+        this._loadWorkstreams();
+        this._loadSharedImages();
+        this._connectSse();
+      }
       // If project arrived after firstUpdated (e.g. page refresh), #xterm-container
       // wasn't in the DOM yet when firstUpdated ran, so initialize now.
       if (!this._term) this._initTerminal();
@@ -1895,6 +1904,12 @@ class LoopProjectScreen extends LitElement {
           const el = this.shadowRoot?.querySelector('.log-pre');
           if (el) el.scrollTop = el.scrollHeight;
         });
+      } else {
+        // Drop the log stream while its tab is hidden. It used to stay open for
+        // the life of the page, holding a second per-origin HTTP connection
+        // that nothing was reading; _connectLogs() re-snapshots on return, so
+        // nothing is lost by closing it.
+        this._disconnectLogs();
       }
       if (this._activeTab === 'agent') {
         requestAnimationFrame(() => this._termFit?.fit());
@@ -1955,8 +1970,7 @@ class LoopProjectScreen extends LitElement {
     }
     this._term?.reset();
     this._disposeShellTerminal();
-    this._logSse?.close();
-    this._logSse = null;
+    this._disconnectLogs();
     this._logLines = [];
     this._logEmpty = true;
     this._files = [];
@@ -2005,8 +2019,10 @@ class LoopProjectScreen extends LitElement {
     if (this._searchKeyHandler) window.removeEventListener('keydown', this._searchKeyHandler);
     this._sse?.close();
     this._sse = null;
-    this._logSse?.close();
-    this._logSse = null;
+    this._disconnectLogs();
+    // updated() only rebuilds connections when the id changes, so forget the
+    // one we were on — a re-attach with the same project must reconnect.
+    this._connectedProjectId = null;
     this._termDataDisposable?.dispose();
     this._termResizeDisposable?.dispose();
     this._termWs?.close();
@@ -2939,6 +2955,10 @@ class LoopProjectScreen extends LitElement {
       this._stopping = status === 'stopping';
       if (status !== 'running') this._stale = false;
       this._buildError = (status === 'error' && detail) ? detail : '';
+      this._emitRuntime({ status });
+    });
+    this._sse.addEventListener('compose', (e) => {
+      this._emitRuntime({ hasCompose: JSON.parse(e.data).hasCompose });
     });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
     this._sse.addEventListener('stale', (e) => { this._stale = JSON.parse(e.data).stale; });
@@ -2954,6 +2974,19 @@ class LoopProjectScreen extends LitElement {
         document.title = 'Done! — Loop';
       }
     });
+  }
+
+  // The app shell keeps the project row (sidebar status, Run button) in sync
+  // from this event rather than opening a second EventSource on the same
+  // /events endpoint: every extra stream permanently eats one of the browser's
+  // six per-origin HTTP connections, and shared-image loads starve behind them.
+  _emitRuntime(detail) {
+    if (!this.project) return;
+    this.dispatchEvent(new CustomEvent('project-runtime', {
+      detail: { id: this.project.id, ...detail },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   async _loadSharedImages() {
@@ -3055,6 +3088,13 @@ class LoopProjectScreen extends LitElement {
     `;
   }
 
+  _disconnectLogs() {
+    clearTimeout(this._logReconnectTimer);
+    this._logReconnectTimer = null;
+    this._logSse?.close();
+    this._logSse = null;
+  }
+
   _connectLogs() {
     if (this._logSse || !this.project || !this.isConnected) return;
     this._logSse = new EventSource(`/api/projects/${this.project.id}/logs`);
@@ -3074,8 +3114,11 @@ class LoopProjectScreen extends LitElement {
     this._logSse.onerror = () => {
       this._logSse?.close();
       this._logSse = null;
-      // Reconnect after a delay
-      if (this.project) setTimeout(() => this._connectLogs(), 3000);
+      // Reconnect after a delay — but only while the logs tab is still showing,
+      // or a closed stream would quietly resurrect itself.
+      if (this.project && this._activeTab === 'logs') {
+        this._logReconnectTimer = setTimeout(() => this._connectLogs(), 3000);
+      }
     };
   }
 
@@ -4544,7 +4587,7 @@ class LoopProjectScreen extends LitElement {
             ` : ''}
           </div>
           <div style="display:${this._activeTab === 'logs' ? 'flex' : 'none'};flex:1;min-height:0">
-            ${this._activeTab === 'logs' || this._logSse ? this._renderLogs() : ''}
+            ${this._activeTab === 'logs' ? this._renderLogs() : ''}
           </div>
           <div class="terminal-body" style="display:${this._activeTab === 'shell' ? 'flex' : 'none'};padding:0;overflow:hidden;position:relative">
             <div id="xterm-shell-container"></div>
