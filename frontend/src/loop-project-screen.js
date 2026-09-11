@@ -108,6 +108,7 @@ class LoopProjectScreen extends LitElement {
     _sharedImages: { state: true },
     _sharedPanelOpen: { state: true },
     _lightbox: { state: true },
+    _sidebarWidth: { state: true },
   };
 
   static styles = [css`
@@ -142,6 +143,29 @@ class LoopProjectScreen extends LitElement {
       width: 100%;
       border-right: none;
       flex: 1;
+    }
+    /* Drag handle between the sidebar and the main column. Sits on top of the
+       sidebar's right border so it needs no width of its own in the layout. */
+    .sidebar-resizer {
+      flex: 0 0 0;
+      width: 0;
+      position: relative;
+      z-index: 20;
+    }
+    .sidebar-resizer::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: -3px;
+      width: 7px;
+      cursor: col-resize;
+      background: transparent;
+      transition: background 0.12s;
+    }
+    .sidebar-resizer:hover::before,
+    .sidebar-resizer.dragging::before {
+      background: var(--accent);
     }
     .sidebar-top {
       padding: 12px;
@@ -1789,6 +1813,7 @@ class LoopProjectScreen extends LitElement {
     this._sharedImages = [];   // [{ file, name, caption, createdAt }] — newest first
     this._sharedPanelOpen = false;
     this._lightbox = null;     // null | shared image entry shown full-screen
+    this._sidebarWidth = this._loadSidebarWidth();
     this._connectedProjectId = null;
     this._fileModels = new Map();       // path -> monaco.ITextModel
     this._fileViewStates = new Map();   // path -> IEditorViewState
@@ -3912,6 +3937,50 @@ class LoopProjectScreen extends LitElement {
     return { dir, filename };
   }
 
+  static SIDEBAR_WIDTH_KEY = 'loop.sidebarWidth';
+  static SIDEBAR_MIN = 200;
+  static SIDEBAR_MAX = 720;
+
+  _loadSidebarWidth() {
+    try {
+      const raw = Number(localStorage.getItem(LoopProjectScreen.SIDEBAR_WIDTH_KEY));
+      if (Number.isFinite(raw) && raw > 0) return this._clampSidebarWidth(raw);
+    } catch {}
+    return 320;
+  }
+
+  _clampSidebarWidth(w) {
+    const max = Math.min(LoopProjectScreen.SIDEBAR_MAX, Math.max(LoopProjectScreen.SIDEBAR_MIN, window.innerWidth - 320));
+    return Math.round(Math.min(max, Math.max(LoopProjectScreen.SIDEBAR_MIN, w)));
+  }
+
+  // Pointer capture keeps the drag alive over the xterm canvas / iframes.
+  _startSidebarResize(e) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = this._sidebarWidth;
+    const handle = e.currentTarget;
+    handle.setPointerCapture?.(e.pointerId);
+    this._resizingSidebar = true;
+    this.requestUpdate();
+
+    const onMove = (ev) => {
+      this._sidebarWidth = this._clampSidebarWidth(startWidth + (ev.clientX - startX));
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      handle.releasePointerCapture?.(e.pointerId);
+      this._resizingSidebar = false;
+      this.requestUpdate();
+      try { localStorage.setItem(LoopProjectScreen.SIDEBAR_WIDTH_KEY, String(this._sidebarWidth)); } catch {}
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  }
+
   _renderFileRow(file) {
     const { dir, filename } = this._pathParts(file.path);
     const isDir = file.path.endsWith('/');
@@ -3928,7 +3997,7 @@ class LoopProjectScreen extends LitElement {
           ` : ''}
         </div>
         <span class="status-badge status-${file.status}">${file.status}</span>
-        <span class="file-path">
+        <span class="file-path" title=${file.path}>
           <span class="dir">${dir}</span>${filename}
         </span>
         <span class="diff-stat">
@@ -4102,7 +4171,7 @@ class LoopProjectScreen extends LitElement {
     const branch = this.project?.branch || 'main';
 
     return html`
-      <div class="sidebar ${asTab ? 'as-tab' : ''}">
+      <div class="sidebar ${asTab ? 'as-tab' : ''}" style=${asTab ? '' : `width:${this._sidebarWidth}px`}>
         <div class="sidebar-top">
           ${this.project?.hasCompose ? html`
             <div class="run-row">
@@ -4481,6 +4550,12 @@ class LoopProjectScreen extends LitElement {
 
       <div class="layout">
         ${this._narrow ? '' : this._renderSidebar()}
+        ${this._narrow ? '' : html`
+          <div
+            class="sidebar-resizer ${this._resizingSidebar ? 'dragging' : ''}"
+            @pointerdown=${this._startSidebarResize}
+          ></div>
+        `}
 
         <div class="main-area">
           <div class="tab-bar">
