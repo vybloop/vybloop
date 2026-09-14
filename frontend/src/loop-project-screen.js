@@ -1,4 +1,7 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import './loop-top-bar.js';
 import {
   iconArrowLeft, iconPlay, iconStop, iconRefresh,
@@ -44,6 +47,8 @@ function detectLanguage(filename) {
   return LANG_MAP[ext] ?? 'plaintext';
 }
 
+const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
+
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']);
 
 const _isMac = /Macintosh|MacIntel/.test(navigator.userAgent);
@@ -76,6 +81,7 @@ class LoopProjectScreen extends LitElement {
     _filesLoading: { state: true },
     _expandedDirs: { state: true },
     _openFiles: { state: true },
+    _markdownEditing: { state: true },
     _openDiffs: { state: true },
     _openImages: { state: true },
     _dialog: { state: true },
@@ -1494,6 +1500,102 @@ class LoopProjectScreen extends LitElement {
     }
     .log-scroll-btn:hover { background: var(--bg-2); }
 
+    .md-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 8px 4px 16px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--bg-1);
+      flex-shrink: 0;
+    }
+    .md-toolbar-path {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .md-toolbar-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--fg-1);
+      font-size: 11px;
+      font-family: var(--font-sans);
+      padding: 3px 10px;
+      cursor: pointer;
+    }
+    .md-toolbar-btn:hover { background: var(--bg-hover, var(--bg-2)); }
+    .md-toolbar-btn svg { width: 12px; height: 12px; }
+    .md-preview {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      background: var(--bg-0);
+    }
+    .md-body {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 24px 32px 48px;
+      color: var(--fg-1);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.65;
+      overflow-wrap: break-word;
+    }
+    .md-body > :first-child { margin-top: 0; }
+    .md-body h1, .md-body h2, .md-body h3, .md-body h4, .md-body h5, .md-body h6 {
+      color: var(--fg-0);
+      line-height: 1.3;
+      margin: 1.6em 0 0.6em;
+      font-weight: 600;
+    }
+    .md-body h1 { font-size: 1.9em; padding-bottom: 0.3em; border-bottom: 1px solid var(--line-soft); }
+    .md-body h2 { font-size: 1.45em; padding-bottom: 0.3em; border-bottom: 1px solid var(--line-soft); }
+    .md-body h3 { font-size: 1.2em; }
+    .md-body h4 { font-size: 1em; }
+    .md-body h5, .md-body h6 { font-size: 0.9em; color: var(--fg-2); }
+    .md-body p, .md-body ul, .md-body ol, .md-body blockquote, .md-body pre, .md-body table { margin: 0 0 1em; }
+    .md-body ul, .md-body ol { padding-left: 2em; }
+    .md-body li + li { margin-top: 0.25em; }
+    .md-body a { color: var(--accent); text-decoration: none; }
+    .md-body a:hover { text-decoration: underline; }
+    .md-body code {
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      background: var(--bg-2);
+      border-radius: 4px;
+      padding: 0.15em 0.4em;
+    }
+    .md-body pre {
+      background: var(--bg-1);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+    .md-body pre code { background: none; padding: 0; font-size: 12.5px; }
+    .md-body blockquote {
+      padding: 0 1em;
+      color: var(--fg-2);
+      border-left: 3px solid var(--line);
+    }
+    .md-body table { border-collapse: collapse; display: block; overflow-x: auto; }
+    .md-body th, .md-body td { border: 1px solid var(--line); padding: 5px 12px; }
+    .md-body th { background: var(--bg-1); font-weight: 600; }
+    .md-body hr { border: none; border-top: 1px solid var(--line); margin: 1.5em 0; }
+    .md-body img { max-width: 100%; }
+    .md-body input[type="checkbox"] { margin: 0 0.4em 0 -1.3em; vertical-align: middle; }
+    .md-body li:has(> input[type="checkbox"]) { list-style: none; }
+
     /* Mobile input FAB + bar */
     :host {
       position: relative;
@@ -1779,6 +1881,8 @@ class LoopProjectScreen extends LitElement {
     this._openFiles = [];   // [{ path, dirty }]
     this._openDiffs = [];   // [{ tabId, path, staged }]
     this._openImages = [];  // string[] paths
+    this._markdownEditing = new Set();  // markdown paths switched to source mode
+    this._markdownCache = new Map();    // path -> { versionId, html }
     this._ports = [];
     this._dialog = null;    // null | { type, ...data }
     this._logLines = [];
@@ -1916,7 +2020,8 @@ class LoopProjectScreen extends LitElement {
     if (changed.has('_activeTab')) {
       const prevTab = changed.get('_activeTab');
       // Save view state for the tab we're leaving
-      if (this._isFilePath(prevTab) && this._monacoEditor) {
+      if (this._isFilePath(prevTab) && this._monacoEditor
+          && this._monacoEditor.getModel() === this._fileModels.get(prevTab)) {
         this._fileViewStates.set(prevTab, this._monacoEditor.saveViewState());
       } else if (this._isDiffTab(prevTab) && this._monacoDiffEditor) {
         this._diffViewStates.set(prevTab, this._monacoDiffEditor.saveViewState());
@@ -1950,17 +2055,7 @@ class LoopProjectScreen extends LitElement {
         this._inputOpen = false;
       }
       if (this._isFilePath(this._activeTab)) {
-        this._ensureMonaco();
-        if (this._monacoEditor) {
-          this._monacoEditor.setModel(this._fileModels.get(this._activeTab) ?? null);
-          const savedState = this._fileViewStates.get(this._activeTab);
-          requestAnimationFrame(() => {
-            this._monacoEditor?.layout();
-            if (savedState) this._monacoEditor?.restoreViewState(savedState);
-            this._applyPendingNav();
-            this._monacoEditor?.focus();
-          });
-        }
+        if (!this._isMarkdownPreview(this._activeTab)) this._showFileInEditor(this._activeTab);
         this._startPolling(true);
       } else if (this._isDiffTab(this._activeTab)) {
         this._stopPolling();
@@ -1976,6 +2071,10 @@ class LoopProjectScreen extends LitElement {
       } else {
         this._stopPolling();
       }
+    }
+    if (changed.has('_markdownEditing') && !changed.has('_activeTab')
+        && this._isFilePath(this._activeTab) && !this._isMarkdownPreview(this._activeTab)) {
+      this._showFileInEditor(this._activeTab);
     }
     if (changed.has('_inputOpen') && this._inputOpen) {
       requestAnimationFrame(() => {
@@ -2020,6 +2119,8 @@ class LoopProjectScreen extends LitElement {
     this._openFiles = [];
     this._openDiffs = [];
     this._openImages = [];
+    this._markdownEditing = new Set();
+    this._markdownCache.clear();
     this._fileChangeListeners.forEach(d => d.dispose());
     this._fileChangeListeners.clear();
     this._fileModels.forEach(m => m.dispose());
@@ -3160,6 +3261,35 @@ class LoopProjectScreen extends LitElement {
     return !['agent', 'logs', 'shell', 'changes'].includes(tab) && !this._isDiffTab(tab) && !this._isImageTab(tab);
   }
 
+  _isMarkdownFile(path) {
+    const ext = path.split('.').pop()?.toLowerCase() ?? '';
+    return MARKDOWN_EXTENSIONS.has(ext);
+  }
+
+  // Markdown files open rendered; the Edit button flips a path into source mode.
+  _isMarkdownPreview(tab) {
+    return this._isFilePath(tab) && this._isMarkdownFile(tab) && !this._markdownEditing.has(tab);
+  }
+
+  _setMarkdownEditing(path, editing) {
+    const next = new Set(this._markdownEditing);
+    if (editing) next.add(path); else next.delete(path);
+    this._markdownEditing = next;
+  }
+
+  _showFileInEditor(path) {
+    this._ensureMonaco();
+    if (!this._monacoEditor) return;
+    this._monacoEditor.setModel(this._fileModels.get(path) ?? null);
+    const savedState = this._fileViewStates.get(path);
+    requestAnimationFrame(() => {
+      this._monacoEditor?.layout();
+      if (savedState) this._monacoEditor?.restoreViewState(savedState);
+      this._applyPendingNav();
+      this._monacoEditor?.focus();
+    });
+  }
+
   _isDiffTab(tab) {
     return typeof tab === 'string' && tab.startsWith('diff:');
   }
@@ -3206,13 +3336,16 @@ class LoopProjectScreen extends LitElement {
         if (entry && entry.dirty !== isDirty) {
           this._openFiles = this._openFiles.map(f => f.path === filePath ? { ...f, dirty: isDirty } : f);
         }
+        // Re-render a visible preview when the file reloads from disk.
+        if (this._activeTab === filePath && this._isMarkdownPreview(filePath)) this.requestUpdate();
       });
       this._fileChangeListeners.set(filePath, listener);
 
       // Set model in editor if this is still the active file
-      if (this._activeTab === filePath && this._monacoEditor) {
-        this._monacoEditor.setModel(model);
-        requestAnimationFrame(() => this._monacoEditor?.layout());
+      if (this._activeTab === filePath && !this._isMarkdownPreview(filePath)) {
+        this._showFileInEditor(filePath);
+      } else if (this._activeTab === filePath) {
+        this.requestUpdate();
       }
     } catch (e) {
       console.error('Failed to load file', e);
@@ -3237,6 +3370,8 @@ class LoopProjectScreen extends LitElement {
     this._fileViewStates.delete(path);
     this._fileMtimes.delete(path);
     this._fileCleanVersions.delete(path);
+    this._markdownCache.delete(path);
+    if (this._markdownEditing.has(path)) this._setMarkdownEditing(path, false);
     const remaining = this._openFiles.filter(f => f.path !== path);
     this._openFiles = remaining;
     if (this._activeTab === path) {
@@ -4040,6 +4175,7 @@ class LoopProjectScreen extends LitElement {
 
   async _openFileAtLine(filePath, line) {
     this._pendingNavLine = { path: filePath, line };
+    if (this._isMarkdownFile(filePath)) this._setMarkdownEditing(filePath, true);
     await this._openFile(filePath);
     this._applyPendingNav();
   }
@@ -4053,6 +4189,91 @@ class LoopProjectScreen extends LitElement {
       this._monacoEditor.focus();
       this._pendingNavLine = null;
     }
+  }
+
+  _renderMarkdownHtml(path) {
+    const model = this._fileModels.get(path);
+    if (!model) return null;
+    const versionId = model.getAlternativeVersionId();
+    const cached = this._markdownCache.get(path);
+    if (cached?.versionId === versionId) return cached.html;
+
+    const frag = DOMPurify.sanitize(marked.parse(model.getValue(), { gfm: true }), { RETURN_DOM_FRAGMENT: true });
+    const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    for (const img of frag.querySelectorAll('img[src]')) {
+      const target = this._resolveRepoPath(dir, img.getAttribute('src'));
+      if (target) img.setAttribute('src', `/api/projects/${this.project.id}/image?path=${encodeURIComponent(target)}`);
+    }
+    // GitHub-style heading ids so in-document #anchors work.
+    const seen = new Map();
+    for (const h of frag.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+      const base = h.textContent.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      h.id = n ? `${base}-${n}` : base;
+    }
+    const holder = document.createElement('div');
+    holder.appendChild(frag);
+    const html = holder.innerHTML;
+    this._markdownCache.set(path, { versionId, html });
+    return html;
+  }
+
+  // Resolve a link/src from a markdown file to a repo-relative path, or null
+  // when it points outside the repo (absolute URLs, anchors, data: URIs).
+  _resolveRepoPath(dir, href) {
+    if (!href || /^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(href)) return null;
+    let clean = href.split(/[?#]/)[0];
+    try { clean = decodeURIComponent(clean); } catch { /* keep as written */ }
+    const parts = clean.startsWith('/') ? [] : (dir ? dir.split('/') : []);
+    for (const seg of clean.split('/')) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') parts.pop(); else parts.push(seg);
+    }
+    return parts.length ? parts.join('/') : null;
+  }
+
+  _onMarkdownClick(e, path) {
+    const a = e.composedPath().find(el => el.tagName === 'A');
+    const href = a?.getAttribute('href');
+    if (!href) return;
+    e.preventDefault();
+    if (href.startsWith('#')) {
+      const id = decodeURIComponent(href.slice(1));
+      e.currentTarget.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView();
+      return;
+    }
+    const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    const target = this._resolveRepoPath(dir, href);
+    if (target) {
+      if (!target.endsWith('/')) this._openFile(target);
+    } else {
+      window.open(href, '_blank', 'noopener,noreferrer');
+    }
+  }
+
+  _renderMarkdownToolbar(path) {
+    if (!this._isFilePath(path) || !this._isMarkdownFile(path)) return '';
+    const editing = this._markdownEditing.has(path);
+    return html`
+      <div class="md-toolbar">
+        <span class="md-toolbar-path">${path}</span>
+        <button class="md-toolbar-btn" @click=${() => this._setMarkdownEditing(path, !editing)}>
+          ${editing ? 'Preview' : html`${iconPencil} Edit`}
+        </button>
+      </div>
+    `;
+  }
+
+  _renderMarkdownPreview(path) {
+    const rendered = this._renderMarkdownHtml(path);
+    return html`
+      <div class="md-preview" @click=${(e) => this._onMarkdownClick(e, path)}>
+        ${rendered === null
+          ? html`<div class="log-empty">Loading…</div>`
+          : html`<div class="md-body">${unsafeHTML(rendered)}</div>`}
+      </div>
+    `;
   }
 
   _focusSearch() {
@@ -4668,7 +4889,9 @@ class LoopProjectScreen extends LitElement {
             <div id="xterm-shell-container"></div>
           </div>
           ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
-          <div id="monaco-container" style="display:${this._isFilePath(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
+          ${this._renderMarkdownToolbar(this._activeTab)}
+          ${this._isMarkdownPreview(this._activeTab) ? this._renderMarkdownPreview(this._activeTab) : ''}
+          <div id="monaco-container" style="display:${this._isFilePath(this._activeTab) && !this._isMarkdownPreview(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
           <div id="diff-container" style="display:${this._isDiffTab(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
           ${this._isImageTab(this._activeTab) ? html`
             <div style="display:flex;flex:1;min-height:0;align-items:center;justify-content:center;padding:16px;overflow:hidden">
