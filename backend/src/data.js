@@ -527,7 +527,9 @@ export function getHostPort(id) {
 // `down`/`ps`/`logs` too, so every invocation must see the same value as the
 // `up` that started the stack.
 export function composeEnv(id) {
-  return { ...process.env, HOST_PORT: String(getHostPort(id) ?? '') };
+  // podman-compose is Python: on a pipe its own messages are block-buffered and
+  // only surface in the Logs tab when the command exits, so force it unbuffered.
+  return { ...process.env, PYTHONUNBUFFERED: '1', HOST_PORT: String(getHostPort(id) ?? '') };
 }
 
 // Initialize a fresh project (no repo to clone): create the git directory,

@@ -81,11 +81,17 @@ export function startLogCapture(projectId, repoPath) {
     }
   };
 
+  buf.add('[loop] Following container logs (podman compose logs -f)');
   proc.stdout.on('data', onData);
   proc.stderr.on('data', onData);
-  proc.on('exit', () => {
+  proc.on('error', (err) => buf.add(`[loop] Could not follow container logs: ${err.message}`));
+  proc.on('close', (code, signal) => {
     if (pending.trim()) buf.add(pending);
+    // A capture we replaced or stopped ourselves is expected to end; any other
+    // exit means the containers went away or compose failed, so say so.
+    if (procs.get(projectId) !== proc) return;
     procs.delete(projectId);
+    buf.add(`[loop] Container log stream ended (${signal ? `signal ${signal}` : `exit code ${code}`}) — containers may have stopped`);
   });
 }
 
