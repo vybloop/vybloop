@@ -9,7 +9,7 @@ import { promisify } from 'util';
 import { createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { TerminalSession, DirectSession } from './terminal-session.js';
-import { agentCommand, installCodexConfig } from './agent-cli.js';
+import { agentCommand, installCodexConfig, EDITOR_ENV } from './agent-cli.js';
 import {
   getProjects,
   getProject,
@@ -729,6 +729,7 @@ const SESSION_COMMANDS = {
     '-v', '/claudeconfig:/claudeconfig',
     '--env', 'GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig',
     '--env', `TZ=${getTimezone()}`,
+    ...EDITOR_ENV,
     '-w', '/project',
     'claude-inner',
     'bash',

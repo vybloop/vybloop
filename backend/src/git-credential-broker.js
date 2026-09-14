@@ -53,6 +53,11 @@ function install() {
   execFileSync('git', ['config', '--file', GIT_CONFIG_PATH, 'credential.helper', `!node ${HELPER_PATH}`]);
   // useHttpPath gives the helper the repo path, so it can tell which owner/install.
   execFileSync('git', ['config', '--file', GIT_CONFIG_PATH, 'credential.useHttpPath', 'true']);
+  // Interactive git (commit without -m, rebase -i) needs an editor; the inner
+  // containers ship nano and nothing else, and neither they nor the backend set
+  // $EDITOR for git to fall back on. Setting it here covers both, since they
+  // share this file via GIT_CONFIG_GLOBAL.
+  execFileSync('git', ['config', '--file', GIT_CONFIG_PATH, 'core.editor', 'nano']);
   try { chmodSync(GIT_CONFIG_PATH, 0o666); } catch {}
 }
 

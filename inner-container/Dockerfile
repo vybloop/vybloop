@@ -7,7 +7,10 @@ FROM ubuntu:24.04
 # no amount of --no-cache rebuilding could fix that.
 # tzdata is needed for the TZ env var (set from Loop's timezone setting) to
 # resolve to a real zone instead of silently falling back to UTC.
-RUN apt-get update && apt-get install -y curl ca-certificates git tzdata && \
+# nano is the interactive editor for git (commit messages, rebase todos) and
+# anything else honouring $EDITOR; the base image ships none, so git would
+# otherwise fail with "Terminal is dumb" / no editor available.
+RUN apt-get update && apt-get install -y curl ca-certificates git tzdata nano && \
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*

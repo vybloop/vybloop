@@ -21,12 +21,17 @@ export const AGENT_INSTRUCTIONS = [
   'To show the user an image or screenshot, run `sh /claudeconfig/loop-share-image.sh <image-file> [caption]` — it appears in a side panel in the Loop UI. Use it whenever a picture explains the result better than text.',
 ];
 
+// nano is installed in claude-inner and set as git's core.editor; exporting it
+// here too makes every other tool that consults $EDITOR/$VISUAL agree.
+export const EDITOR_ENV = ['--env', 'EDITOR=nano', '--env', 'VISUAL=nano'];
+
 // Env every agent container gets, whichever CLI runs in it.
 function commonEnv(projectId) {
   return [
     '--env', 'GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig',
     '--env', 'IS_SANDBOX=1',
     '--env', 'COLORTERM=truecolor',
+    ...EDITOR_ENV,
     '--env', `TZ=${getTimezone()}`,
     '--env', `LOOP_PROJECT_ID=${projectId}`,
   ];
