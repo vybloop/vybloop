@@ -231,6 +231,29 @@ function pollContainerLogs(projectId, buf, since, intervalMs = 3000) {
 
 const COMPOSE_HEARTBEAT_MS = 20_000;
 
+// In-flight `compose up` per project id. `up` can block indefinitely on an
+// unhealthy dependency, and `compose down` removes the containers without ending
+// it, so stop/restart/delete must kill it (and its heartbeat) explicitly.
+const composeUps = new Map(); // id -> { proc, cancelled }
+
+// Kill a project's in-flight `compose up`, if any, and wait for it to exit.
+// The composeUp it belongs to then throws an error with `cancelled: true`.
+async function cancelComposeUp(id, buf) {
+  const entry = composeUps.get(id);
+  if (!entry) return;
+  entry.cancelled = true;
+  buf.add('[loop] Cancelling the in-progress compose up');
+  const exited = new Promise((r) => entry.proc.once('close', r));
+  // podman-compose runs its own `podman` children; signal the whole group.
+  const killGroup = (signal) => { try { process.kill(-entry.proc.pid, signal); } catch {} };
+  killGroup('SIGTERM');
+  const timedOut = await Promise.race([exited.then(() => false), new Promise((r) => setTimeout(() => r(true), 5000))]);
+  if (timedOut) {
+    killGroup('SIGKILL');
+    await exited;
+  }
+}
+
 // Run `podman compose up` for a project, streaming its output into the Logs
 // buffer. `up -d` can sit silent for minutes (pulling a multi-GB image, waiting
 // on a `depends_on: condition: service_healthy` healthcheck), which from the UI
@@ -247,7 +270,10 @@ async function composeUp(id, repoPath, buf) {
   const containerLogs = pollContainerLogs(id, buf, new Date(started).toISOString());
   try {
     await new Promise((resolve, reject) => {
-      const proc = spawn('podman', args, { cwd: repoPath, env });
+      // detached: own process group, so cancelComposeUp can kill its children too.
+      const proc = spawn('podman', args, { cwd: repoPath, env, detached: true });
+      const entry = { proc, cancelled: false };
+      composeUps.set(id, entry);
       let pending = '';
       const onData = (chunk) => {
         lastOutput = Date.now();
@@ -266,17 +292,26 @@ async function composeUp(id, repoPath, buf) {
       }, COMPOSE_HEARTBEAT_MS);
       proc.stdout.on('data', onData);
       proc.stderr.on('data', onData);
-      proc.on('error', (err) => { clearInterval(heartbeat); reject(err); });
+      const done = () => {
+        clearInterval(heartbeat);
+        if (composeUps.get(id) === entry) composeUps.delete(id);
+      };
+      proc.on('error', (err) => { done(); reject(err); });
       // 'close' (not 'exit') so every buffered line is in before we report.
       proc.on('close', (code, signal) => {
-        clearInterval(heartbeat);
+        done();
         if (pending.trim()) buf.add(pending);
-        if (code === 0) resolve();
+        if (entry.cancelled) reject(Object.assign(new Error('compose up cancelled'), { cancelled: true }));
+        else if (code === 0) resolve();
         else reject(new Error(signal ? `compose up killed by ${signal}` : `compose up exited with code ${code}`));
       });
     });
   } catch (err) {
     await containerLogs.stop();
+    if (err.cancelled) {
+      buf.add(`[loop] compose up cancelled after ${secs(Date.now() - started)}`);
+      throw err;
+    }
     buf.add(`[loop] ${err.message} after ${secs(Date.now() - started)}. Container states:`);
     await logContainerStates(id, buf);
     throw err;
@@ -295,6 +330,7 @@ async function teardownProject(id, isRunning) {
   destroyWatcher(id);
   notifyProjectStopped(id);
   clearSharedImages(id);
+  await cancelComposeUp(id, getOrCreateBuffer(id));
   if (isRunning) {
     await composeDown(id, `/data/${id}/git`).catch(() => {});
   }
@@ -413,7 +449,9 @@ app.post('/api/projects/:id/run', async (req, res) => {
     notifyProjectStopped(id);
     res.json({ status: 'stopping' });
     stopLogCapture(id);
-    composeDown(id, repoPath).then(() => {
+    // Kill a still-running `up` first: otherwise it outlives the stop (heartbeat
+    // and all) and could recreate containers `down` just removed.
+    cancelComposeUp(id, getOrCreateBuffer(id)).then(() => composeDown(id, repoPath)).then(() => {
       setProjectStatus(id, 'idle');
       broadcastStatus(id, 'idle');
     }).catch((err) => {
@@ -431,11 +469,14 @@ app.post('/api/projects/:id/run', async (req, res) => {
       // Remove any leftover pod from a prior crashed shutdown — compose up will
       // fail if the pod already exists, even with --force-recreate.
       await execFileAsync('podman', ['pod', 'rm', '-f', `pod_${id}`], { timeout: 10_000 }).catch(() => {});
+      // Stopped while the pod was being removed: don't start anything.
+      if (getProjectStatus(id) !== 'running') return;
       try {
         const logsSince = await composeUp(id, repoPath, buf);
         startLogCapture(id, repoPath, logsSince);
         publishPorts(id, repoPath);
       } catch (err) {
+        if (err.cancelled) return; // stopped by the user; the stop path owns status
         console.error(`[compose] up failed for ${id}:`, err.message);
         setProjectStatus(id, 'error');
         broadcastStatus(id, 'error', 'Build failed — check the Logs tab');
@@ -458,6 +499,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
   const buf = startBuildCapture(id);
 
   buf.add('[loop] Restart: stopping the existing stack');
+  await cancelComposeUp(id, buf);
   try {
     await composeDown(id, repoPath);
   } catch (downErr) {
@@ -475,6 +517,7 @@ app.post('/api/projects/:id/restart', async (req, res) => {
       broadcastStatus(id, 'running');
       publishPorts(id, repoPath);
     } catch (upErr) {
+      if (upErr.cancelled) return; // superseded by a stop/restart; that path owns status
       console.error(`[compose] restart/up failed for ${id}:`, upErr.message);
       setProjectStatus(id, 'error');
       broadcastStatus(id, 'error', 'Build failed — check the Logs tab');
