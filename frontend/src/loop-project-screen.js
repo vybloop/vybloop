@@ -106,6 +106,7 @@ class LoopProjectScreen extends LitElement {
     _stale: { state: true },
     _buildError: { state: true },
     _claudeLink: { state: true },
+    _osc52Copy: { state: true },
     _panelMenu: { state: true },
     _workstreams: { state: true },
     _wsMenuOpen: { state: true },
@@ -2107,6 +2108,7 @@ class LoopProjectScreen extends LitElement {
     this._commitError = '';
     this._committed = false;
     this._claudeLink = null;
+    this._dismissOsc52();
     this._sharedImages = [];
     this._sharedPanelOpen = false;
     this._lightbox = null;
@@ -2213,6 +2215,14 @@ class LoopProjectScreen extends LitElement {
         navigator.clipboard.readText().then(text => term.paste(text)).catch(() => {});
         return false;
       }
+      return true;
+    });
+
+    // OSC 52 (`ESC ] 52 ; <targets> ; <base64> BEL`) is how TUI apps like
+    // Claude Code put a mouse selection on the clipboard. xterm.js ignores it
+    // by default, so the app reports "Sent N chars via OSC 52" and nothing lands.
+    term.parser.registerOscHandler(52, (payload) => {
+      this._handleOsc52(kind, payload);
       return true;
     });
 
@@ -2407,6 +2417,88 @@ class LoopProjectScreen extends LitElement {
   _dismissClaudeLink() {
     this._dismissedLink = this._claudeLink;
     this._claudeLink = null;
+  }
+
+  _handleOsc52(kind, payload) {
+    const sep = payload.indexOf(';');
+    const b64 = sep === -1 ? payload : payload.slice(sep + 1);
+    if (!b64 || b64 === '?') return;   // clipboard read request — never answer it
+    let text;
+    try {
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      text = new TextDecoder().decode(bytes);
+    } catch {
+      return;
+    }
+    if (!text) return;
+    clearTimeout(this._osc52Timer);
+    this._osc52Copy = { kind, text, copied: false };
+    // The selection came from a mouse gesture, so the browser often still allows
+    // a direct write. If not (insecure http origin, expired activation) the toast
+    // keeps a Copy button, whose click is a fresh gesture.
+    this._writeClipboard(text, false).then(ok => {
+      if (ok && this._osc52Copy?.text === text) this._markOsc52Copied();
+    });
+  }
+
+  async _writeClipboard(text, fromGesture) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch { /* fall through */ }
+    if (!fromGesture) return false;
+    // execCommand fallback for non-secure origins, where navigator.clipboard is absent.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { /* ignore */ }
+    ta.remove();
+    (this._osc52Copy?.kind === 'shell' ? this._shellTerm : this._term)?.focus();
+    return ok;
+  }
+
+  async _copyOsc52() {
+    if (!this._osc52Copy) return;
+    if (await this._writeClipboard(this._osc52Copy.text, true)) this._markOsc52Copied();
+  }
+
+  _markOsc52Copied() {
+    this._osc52Copy = { ...this._osc52Copy, copied: true };
+    clearTimeout(this._osc52Timer);
+    this._osc52Timer = setTimeout(() => { this._osc52Copy = null; }, 2500);
+  }
+
+  _dismissOsc52() {
+    clearTimeout(this._osc52Timer);
+    this._osc52Copy = null;
+  }
+
+  _renderOsc52Toast(kind) {
+    const c = this._osc52Copy;
+    if (!c || c.kind !== kind) return '';
+    const preview = c.text.length > 200 ? `${c.text.slice(0, 200)}…` : c.text;
+    return html`
+      <div class="claude-link-toast">
+        <span class="claude-link-icon">${c.copied ? iconCheck : iconCopy}</span>
+        <div class="claude-link-body">
+          <div class="claude-link-label">
+            ${c.copied ? `Copied ${c.text.length} chars` : `Copy ${c.text.length} chars to clipboard?`}
+          </div>
+          <span class="claude-link-url" title=${preview}>${preview}</span>
+        </div>
+        ${c.copied ? '' : html`<button class="claude-link-open" @click=${() => this._copyOsc52()}>Copy</button>`}
+        <button class="claude-link-dismiss" @click=${() => this._dismissOsc52()} title="Dismiss">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 6 6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+    `;
   }
 
   async _loadChanges() {
@@ -4881,12 +4973,14 @@ class LoopProjectScreen extends LitElement {
                 </button>
               </div>
             ` : ''}
+            ${this._renderOsc52Toast('agent')}
           </div>
           <div style="display:${this._activeTab === 'logs' ? 'flex' : 'none'};flex:1;min-height:0">
             ${this._activeTab === 'logs' ? this._renderLogs() : ''}
           </div>
           <div class="terminal-body" style="display:${this._activeTab === 'shell' ? 'flex' : 'none'};padding:0;overflow:hidden;position:relative">
             <div id="xterm-shell-container"></div>
+            ${this._renderOsc52Toast('shell')}
           </div>
           ${this._narrow && this._activeTab === 'changes' ? this._renderSidebar(true) : ''}
           ${this._renderMarkdownToolbar(this._activeTab)}
