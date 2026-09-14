@@ -140,21 +140,93 @@ async function publishPorts(projectId, repoPath, { attempts = 20, intervalMs = 1
 
 const secs = (ms) => `${Math.round(ms / 1000)}s`;
 
+async function listComposeContainers(projectId, format) {
+  const { stdout } = await execFileAsync('podman', [
+    'ps', '-a', '--filter', `label=io.podman.compose.project=${projectId}`, '--format', format,
+  ], { timeout: 10_000 });
+  return stdout.trim().split('\n').filter(Boolean);
+}
+
 // Append one line per compose container (name · status · image) to a log buffer.
 // Status carries the useful bits: "Up 2 minutes (starting)" for a pending
-// healthcheck, "Exited (1) 5 seconds ago" for a crash.
+// healthcheck, "Exited (1) 5 seconds ago" for a crash. A restart policy hides
+// crashes behind a fresh "Up 3 seconds", so the restart count and last exit code
+// are appended when a container has restarted.
 async function logContainerStates(projectId, buf) {
   try {
-    const { stdout } = await execFileAsync('podman', [
-      'ps', '-a', '--filter', `label=io.podman.compose.project=${projectId}`,
-      '--format', '{{.Names}} · {{.Status}} · {{.Image}}',
-    ], { timeout: 10_000 });
-    const rows = stdout.trim().split('\n').filter(Boolean);
+    const rows = (await listComposeContainers(projectId, '{{.ID}}\t{{.Names}} · {{.Status}} · {{.Image}}'))
+      .map((row) => row.split('\t'));
     if (rows.length === 0) buf.add('[loop]   (no containers created yet: still pulling images or building)');
-    for (const row of rows) buf.add(`[loop]   ${row}`);
+    let restarts = [];
+    if (rows.length > 0) {
+      const { stdout } = await execFileAsync('podman', [
+        'inspect', '--format', '{{.RestartCount}} {{.State.ExitCode}}', ...rows.map(([cid]) => cid),
+      ], { timeout: 10_000 }).catch(() => ({ stdout: '' }));
+      restarts = stdout.trim().split('\n');
+    }
+    rows.forEach(([, desc], i) => {
+      const [count, exitCode] = (restarts[i] || '').split(' ');
+      const extra = +count > 0 ? ` · restarted ${count}× (last exit code ${exitCode})` : '';
+      buf.add(`[loop]   ${desc}${extra}`);
+    });
   } catch (e) {
     buf.add(`[loop]   Could not list containers: ${e.message}`);
   }
+}
+
+// Forward container output into the Logs buffer while `compose up` is still
+// running. `compose logs -f` only starts once `up` returns, and `up` blocks for
+// as long as a `depends_on: condition: service_healthy` dependency is unhealthy,
+// which is exactly when that dependency's output matters. Polls consecutive
+// --since/--until windows rather than following, because `podman logs -f` ends
+// whenever a container stops, and a crash-looping one stops constantly.
+// stop() does a final poll and resolves to the end of the covered window, so
+// the `compose logs -f` that takes over can start exactly there.
+function pollContainerLogs(projectId, buf, since, intervalMs = 3000) {
+  const failed = new Set();
+  let stopped = false;
+  let timer = null;
+  let current = null;
+
+  const poll = async () => {
+    const until = new Date().toISOString();
+    let names;
+    try {
+      names = await listComposeContainers(projectId, '{{.Names}}');
+    } catch {
+      return; // leave `since` alone so the next poll covers this window
+    }
+    for (const name of names) {
+      try {
+        const { stdout, stderr } = await execFileAsync('podman', ['logs', '--since', since, '--until', until, name], {
+          timeout: 10_000, maxBuffer: 16 * 1024 * 1024,
+        });
+        for (const line of `${stdout}${stderr}`.split('\n')) {
+          if (line.trim()) buf.add(`${name} | ${line}`);
+        }
+      } catch (e) {
+        if (!failed.has(name)) buf.add(`[loop] Could not read logs for ${name}: ${e.message}`);
+        failed.add(name);
+      }
+    }
+    since = until;
+  };
+
+  const tick = async () => {
+    await poll();
+    if (!stopped) timer = setTimeout(() => { current = tick(); }, intervalMs);
+  };
+  current = tick();
+
+  return {
+    async stop() {
+      stopped = true;
+      clearTimeout(timer);
+      await current;
+      await poll();
+      return since;
+    },
+  };
 }
 
 const COMPOSE_HEARTBEAT_MS = 20_000;
@@ -163,13 +235,16 @@ const COMPOSE_HEARTBEAT_MS = 20_000;
 // buffer. `up -d` can sit silent for minutes (pulling a multi-GB image, waiting
 // on a `depends_on: condition: service_healthy` healthcheck), which from the UI
 // is indistinguishable from a hang, so narrate the outcome and emit a heartbeat
-// with container states whenever the command goes quiet. Throws on failure.
+// with container states whenever the command goes quiet. Container output is
+// forwarded as it happens (see pollContainerLogs). Throws on failure; on success
+// resolves to the timestamp `compose logs -f` should resume from.
 async function composeUp(id, repoPath, buf) {
   const args = ['compose', '-p', id, 'up', '--build', '--force-recreate', '-d'];
   const env = composeEnv(id);
   buf.add(`[loop] Running: podman ${args.join(' ')} (HOST_PORT=${env.HOST_PORT})`);
   const started = Date.now();
   let lastOutput = started;
+  const containerLogs = pollContainerLogs(id, buf, new Date(started).toISOString());
   try {
     await new Promise((resolve, reject) => {
       const proc = spawn('podman', args, { cwd: repoPath, env });
@@ -186,7 +261,7 @@ async function composeUp(id, repoPath, buf) {
       const heartbeat = setInterval(() => {
         const quiet = Date.now() - lastOutput;
         if (quiet < COMPOSE_HEARTBEAT_MS) return;
-        buf.add(`[loop] compose up still running: ${secs(Date.now() - started)} elapsed, no output for ${secs(quiet)}. Container states:`);
+        buf.add(`[loop] compose up still running: ${secs(Date.now() - started)} elapsed, no compose output for ${secs(quiet)}. Container states:`);
         logContainerStates(id, buf);
       }, COMPOSE_HEARTBEAT_MS);
       proc.stdout.on('data', onData);
@@ -201,12 +276,15 @@ async function composeUp(id, repoPath, buf) {
       });
     });
   } catch (err) {
+    await containerLogs.stop();
     buf.add(`[loop] ${err.message} after ${secs(Date.now() - started)}. Container states:`);
     await logContainerStates(id, buf);
     throw err;
   }
+  const logsSince = await containerLogs.stop();
   buf.add(`[loop] compose up finished in ${secs(Date.now() - started)}. Container states:`);
   await logContainerStates(id, buf);
+  return logsSince;
 }
 
 // Stop everything live for a project id (a project or one of its workstreams)
@@ -354,8 +432,8 @@ app.post('/api/projects/:id/run', async (req, res) => {
       // fail if the pod already exists, even with --force-recreate.
       await execFileAsync('podman', ['pod', 'rm', '-f', `pod_${id}`], { timeout: 10_000 }).catch(() => {});
       try {
-        await composeUp(id, repoPath, buf);
-        startLogCapture(id, repoPath);
+        const logsSince = await composeUp(id, repoPath, buf);
+        startLogCapture(id, repoPath, logsSince);
         publishPorts(id, repoPath);
       } catch (err) {
         console.error(`[compose] up failed for ${id}:`, err.message);
@@ -389,8 +467,8 @@ app.post('/api/projects/:id/restart', async (req, res) => {
 
   (async () => {
     try {
-      await composeUp(id, repoPath, buf);
-      startLogCapture(id, repoPath);
+      const logsSince = await composeUp(id, repoPath, buf);
+      startLogCapture(id, repoPath, logsSince);
       // A restart leaves the row 'running', but re-broadcasting clears any build
       // error the UI is still showing from a previous failed run.
       setProjectStatus(id, 'running');

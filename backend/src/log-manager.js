@@ -60,7 +60,9 @@ export function startBuildCapture(projectId) {
   return buf;
 }
 
-export function startLogCapture(projectId, repoPath) {
+// `since` (an RFC 3339 timestamp) skips output already forwarded to the buffer
+// while `compose up` was still running.
+export function startLogCapture(projectId, repoPath, since = null) {
   // Kill any existing capture process
   const existing = procs.get(projectId);
   if (existing) { existing.kill(); procs.delete(projectId); }
@@ -68,7 +70,8 @@ export function startLogCapture(projectId, repoPath) {
   // Append to existing buffer (build output may already be there)
   const buf = getOrCreateBuffer(projectId);
 
-  const proc = spawn('podman', ['compose', '-p', projectId, 'logs', '-f'], { cwd: repoPath, env: composeEnv(projectId) });
+  const args = ['compose', '-p', projectId, 'logs', '-f', ...(since ? ['--since', since] : [])];
+  const proc = spawn('podman', args, { cwd: repoPath, env: composeEnv(projectId) });
   procs.set(projectId, proc);
 
   let pending = '';
