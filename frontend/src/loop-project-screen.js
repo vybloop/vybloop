@@ -1914,6 +1914,7 @@ class LoopProjectScreen extends LitElement {
     this._buildError = '';
     this._panelMenu = null;   // null | { x, y } — the changes panel "..." menu
     this._workstreams = [];   // [{ id, workstream, branch, status }] — default first
+    this._agentDoneUnseen = false; // agent finished while the tab was hidden
     this._wsMenuOpen = false;
     this._creatingWorkstream = false;
     this._deletingWorkstream = false;
@@ -1946,7 +1947,10 @@ class LoopProjectScreen extends LitElement {
     super.connectedCallback();
     this._mq.addEventListener('change', this._mqHandler);
     this._visibilityHandler = () => {
-      if (document.visibilityState === 'visible') document.title = 'Loop';
+      if (document.visibilityState === 'visible') {
+        this._agentDoneUnseen = false;
+        this._updateTitle();
+      }
     };
     document.addEventListener('visibilitychange', this._visibilityHandler);
     this._searchKeyHandler = (e) => {
@@ -2004,6 +2008,8 @@ class LoopProjectScreen extends LitElement {
       // wasn't in the DOM yet when firstUpdated ran, so initialize now.
       if (!this._term) this._initTerminal();
       else if (!this._termWs || switched) this._connectWs();
+      if (switched) this._agentDoneUnseen = false;
+      this._updateTitle();
     }
     if (changed.has('project') && this.project?.status === 'running') {
       this._fetchPorts();
@@ -2154,6 +2160,7 @@ class LoopProjectScreen extends LitElement {
     super.disconnectedCallback();
     this._mq?.removeEventListener('change', this._mqHandler);
     if (this._visibilityHandler) document.removeEventListener('visibilitychange', this._visibilityHandler);
+    this._agentDoneUnseen = false;
     document.title = 'Loop';
     if (this._searchKeyHandler) window.removeEventListener('keydown', this._searchKeyHandler);
     this._sse?.close();
@@ -2750,6 +2757,17 @@ class LoopProjectScreen extends LitElement {
 
   // --- Workstreams ---------------------------------------------------------
 
+  // Tab title: "<project>" or "<project> - <workstream>", prefixed with
+  // "Done!" while an agent-done notification hasn't been seen yet. Tracked as a
+  // flag because `project` is re-set on every runtime update, which would
+  // otherwise clobber the notification while the tab is in the background.
+  _updateTitle() {
+    if (!this.project) return;
+    const { name, workstream } = this.project;
+    const base = workstream ? `${name} - ${workstream}` : name;
+    document.title = this._agentDoneUnseen ? `Done! — ${base}` : base;
+  }
+
   // The id of the project this workstream belongs to (itself, if it is the
   // default workstream).
   get _parentId() {
@@ -3200,7 +3218,8 @@ class LoopProjectScreen extends LitElement {
     });
     this._sse.addEventListener('agent-done', () => {
       if (document.visibilityState !== 'visible') {
-        document.title = 'Done! — Loop';
+        this._agentDoneUnseen = true;
+        this._updateTitle();
       }
     });
   }
