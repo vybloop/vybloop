@@ -1,5 +1,6 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
+import { keyed } from 'lit/directives/keyed.js';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import './loop-top-bar.js';
@@ -1884,6 +1885,7 @@ class LoopProjectScreen extends LitElement {
     this._openImages = [];  // string[] paths
     this._markdownEditing = new Set();  // markdown paths switched to source mode
     this._markdownCache = new Map();    // path -> { versionId, html }
+    this._markdownScroll = new Map();   // path -> preview scrollTop
     this._ports = [];
     this._dialog = null;    // null | { type, ...data }
     this._logLines = [];
@@ -2077,6 +2079,14 @@ class LoopProjectScreen extends LitElement {
         && this._isFilePath(this._activeTab) && !this._isMarkdownPreview(this._activeTab)) {
       this._showFileInEditor(this._activeTab);
     }
+    // The preview element is recreated whenever it comes back into view, so
+    // put it back where the user left it.
+    if ((changed.has('_activeTab') || changed.has('_markdownEditing'))
+        && this._isMarkdownPreview(this._activeTab)) {
+      const el = this.shadowRoot?.querySelector('.md-preview');
+      const top = this._markdownScroll.get(this._activeTab);
+      if (el && top) el.scrollTop = top;
+    }
     if (changed.has('_inputOpen') && this._inputOpen) {
       requestAnimationFrame(() => {
         this.shadowRoot.querySelector('.mobile-input-textarea')?.focus();
@@ -2123,6 +2133,7 @@ class LoopProjectScreen extends LitElement {
     this._openImages = [];
     this._markdownEditing = new Set();
     this._markdownCache.clear();
+    this._markdownScroll.clear();
     this._fileChangeListeners.forEach(d => d.dispose());
     this._fileChangeListeners.clear();
     this._fileModels.forEach(m => m.dispose());
@@ -3463,6 +3474,7 @@ class LoopProjectScreen extends LitElement {
     this._fileMtimes.delete(path);
     this._fileCleanVersions.delete(path);
     this._markdownCache.delete(path);
+    this._markdownScroll.delete(path);
     if (this._markdownEditing.has(path)) this._setMarkdownEditing(path, false);
     const remaining = this._openFiles.filter(f => f.path !== path);
     this._openFiles = remaining;
@@ -4359,13 +4371,17 @@ class LoopProjectScreen extends LitElement {
 
   _renderMarkdownPreview(path) {
     const rendered = this._renderMarkdownHtml(path);
-    return html`
-      <div class="md-preview" @click=${(e) => this._onMarkdownClick(e, path)}>
+    // Keyed so switching between two markdown tabs gets a fresh element
+    // instead of inheriting the other file's scroll offset.
+    return keyed(path, html`
+      <div class="md-preview"
+        @click=${(e) => this._onMarkdownClick(e, path)}
+        @scroll=${(e) => { if (rendered !== null) this._markdownScroll.set(path, e.currentTarget.scrollTop); }}>
         ${rendered === null
           ? html`<div class="log-empty">Loading…</div>`
           : html`<div class="md-body">${unsafeHTML(rendered)}</div>`}
       </div>
-    `;
+    `);
   }
 
   _focusSearch() {
