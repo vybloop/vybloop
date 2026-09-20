@@ -3743,17 +3743,35 @@ class LoopProjectScreen extends LitElement {
       // Always update our stored mtime so save conflict detection works
       this._fileMtimes.set(path, mtime);
       const entry = this._openFiles.find(f => f.path === path);
-      if (!entry?.dirty) {
-        // Clean file: auto-reload
-        const model = this._fileModels.get(path);
-        if (model) {
-          model.setValue(content);
-          this._fileCleanVersions.set(path, model.getAlternativeVersionId());
-        }
-      }
+      if (!entry?.dirty) this._reloadFile(path, content);
       // If dirty: leave the model alone; save will show a conflict dialog
     } catch {
       // Silently ignore poll errors
+    }
+  }
+
+  // Pull an external edit into an unmodified file's model without the tab
+  // going dirty. model.setValue() fires the model's change listener
+  // synchronously, and at that point _fileCleanVersions still holds the *old*
+  // version id, so the listener flags the tab dirty and the next close/switch
+  // prompts to save changes the user never made. Stamping the new clean
+  // version and clearing the flag afterwards is what keeps the file "clean";
+  // both happen in this same task, so lit renders the tab only once.
+  _reloadFile(path, content) {
+    const model = this._fileModels.get(path);
+    if (!model) return;
+    if (model.getValue() !== content) {
+      // setValue drops the editor's scroll offset and cursor, so put them back.
+      const inEditor = this._monacoEditor && this._monacoEditor.getModel() === model;
+      const viewState = inEditor ? this._monacoEditor.saveViewState() : null;
+      model.setValue(content);
+      if (viewState) this._monacoEditor.restoreViewState(viewState);
+      // A markdown preview re-renders off the new version id; _syncMarkdownScroll()
+      // restores its scroll offset on the update that follows.
+    }
+    this._fileCleanVersions.set(path, model.getAlternativeVersionId());
+    if (this._openFiles.some(f => f.path === path && f.dirty)) {
+      this._openFiles = this._openFiles.map(f => f.path === path ? { ...f, dirty: false } : f);
     }
   }
 
