@@ -1886,6 +1886,7 @@ class LoopProjectScreen extends LitElement {
     this._markdownEditing = new Set();  // markdown paths switched to source mode
     this._markdownCache = new Map();    // path -> { versionId, html }
     this._markdownScroll = new Map();   // path -> preview scrollTop
+    this._mdShown = null;               // { path, versionId } currently in .md-preview
     this._ports = [];
     this._dialog = null;    // null | { type, ...data }
     this._logLines = [];
@@ -2085,14 +2086,7 @@ class LoopProjectScreen extends LitElement {
         && this._isFilePath(this._activeTab) && !this._isMarkdownPreview(this._activeTab)) {
       this._showFileInEditor(this._activeTab);
     }
-    // The preview element is recreated whenever it comes back into view, so
-    // put it back where the user left it.
-    if ((changed.has('_activeTab') || changed.has('_markdownEditing'))
-        && this._isMarkdownPreview(this._activeTab)) {
-      const el = this.shadowRoot?.querySelector('.md-preview');
-      const top = this._markdownScroll.get(this._activeTab);
-      if (el && top) el.scrollTop = top;
-    }
+    this._syncMarkdownScroll();
     if (changed.has('_inputOpen') && this._inputOpen) {
       requestAnimationFrame(() => {
         this.shadowRoot.querySelector('.mobile-input-textarea')?.focus();
@@ -2140,6 +2134,7 @@ class LoopProjectScreen extends LitElement {
     this._markdownEditing = new Set();
     this._markdownCache.clear();
     this._markdownScroll.clear();
+    this._mdShown = null;
     this._fileChangeListeners.forEach(d => d.dispose());
     this._fileChangeListeners.clear();
     this._fileModels.forEach(m => m.dispose());
@@ -4388,6 +4383,34 @@ class LoopProjectScreen extends LitElement {
     `;
   }
 
+  // Put the preview back where the user left it. The element is recreated
+  // whenever the tab comes back into view, and its contents are replaced
+  // wholesale whenever the file changes on disk (the poll that resumes on tab
+  // activation reloads the model) — both reset scrollTop to 0, so this runs on
+  // every update and re-applies the saved offset whenever what's on screen is
+  // not what was there last time.
+  _syncMarkdownScroll() {
+    const path = this._activeTab;
+    const el = this._isMarkdownPreview(path) ? this.shadowRoot?.querySelector('.md-preview') : null;
+    const versionId = el ? this._markdownCache.get(path)?.versionId : undefined;
+    if (versionId === undefined) {   // hidden, or still showing "Loading…"
+      this._mdShown = null;
+      return;
+    }
+    if (this._mdShown?.path === path && this._mdShown.versionId === versionId) return;
+    this._mdShown = { path, versionId };
+    el.scrollTop = this._markdownScroll.get(path) ?? 0;
+  }
+
+  _onMarkdownScroll(e, path) {
+    const el = e.currentTarget;
+    // Scroll events are delivered a frame late, so one can arrive after the
+    // element was detached by a tab switch or reset by a content swap. Both
+    // report 0 and would overwrite the position we're trying to remember.
+    if (!el.isConnected || this._mdShown?.path !== path) return;
+    this._markdownScroll.set(path, el.scrollTop);
+  }
+
   _renderMarkdownPreview(path) {
     const rendered = this._renderMarkdownHtml(path);
     // Keyed so switching between two markdown tabs gets a fresh element
@@ -4395,7 +4418,7 @@ class LoopProjectScreen extends LitElement {
     return keyed(path, html`
       <div class="md-preview"
         @click=${(e) => this._onMarkdownClick(e, path)}
-        @scroll=${(e) => { if (rendered !== null) this._markdownScroll.set(path, e.currentTarget.scrollTop); }}>
+        @scroll=${(e) => this._onMarkdownScroll(e, path)}>
         ${rendered === null
           ? html`<div class="log-empty">Loading…</div>`
           : html`<div class="md-body">${unsafeHTML(rendered)}</div>`}
