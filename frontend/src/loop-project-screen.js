@@ -3190,6 +3190,8 @@ class LoopProjectScreen extends LitElement {
       this._syncRunState();
     });
     this._sse.addEventListener('changes', (e) => { this._files = JSON.parse(e.data); });
+    // Git state (branch ahead/behind) moves with commits made outside the UI too.
+    this._sse.addEventListener('remote-status', (e) => { this._remoteStatus = JSON.parse(e.data); });
     this._sse.addEventListener('files', (e) => { this._fileTree = JSON.parse(e.data); });
     this._sse.addEventListener('status', (e) => {
       const { status, detail } = JSON.parse(e.data);

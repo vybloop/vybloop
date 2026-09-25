@@ -1,5 +1,5 @@
 import chokidar from 'chokidar';
-import { getChanges, getFileTree, getHasCompose } from './data.js';
+import { getChanges, getFileTree, getHasCompose, getRemoteStatus } from './data.js';
 
 const watchers = new Map();
 const runStartTimes = new Map(); // projectId -> start timestamp (ms)
@@ -11,7 +11,10 @@ class ProjectWatcher {
     this.clients = new Set();
     this._debounceTimer = null;
     this._chokidar = null;
+    this._git = null;
     this._hasCompose = getHasCompose(projectId);
+    this._lastChanges = null;
+    this._lastRemote = null;
   }
 
   _start() {
@@ -22,6 +25,27 @@ class ProjectWatcher {
       persistent: true,
     });
     this._chokidar.on('all', () => this._schedule());
+
+    // The worktree watcher ignores `.git`, so git operations run outside the UI
+    // — a commit, merge, rebase or checkout typed in the shell tab — produce no
+    // event of their own and the changes list keeps showing work that is already
+    // committed. Watch the handful of files that record git's state instead of
+    // the whole directory: `.git/objects` churns constantly and would be a lot
+    // of watches for no signal. Index/ref writes land via a `.lock` rename, so
+    // the lock files themselves are noise.
+    const gitPath = `${repoPath}/.git`;
+    this._git = chokidar.watch(
+      [
+        `${gitPath}/HEAD`,
+        `${gitPath}/index`,
+        `${gitPath}/MERGE_HEAD`,
+        `${gitPath}/ORIG_HEAD`,
+        `${gitPath}/packed-refs`,
+        `${gitPath}/refs`,
+      ],
+      { ignored: /\.lock$/, ignoreInitial: true, persistent: true },
+    );
+    this._git.on('all', () => this._schedule());
   }
 
   _stop() {
@@ -29,6 +53,8 @@ class ProjectWatcher {
     this._debounceTimer = null;
     this._chokidar?.close();
     this._chokidar = null;
+    this._git?.close();
+    this._git = null;
   }
 
   _schedule() {
@@ -38,10 +64,20 @@ class ProjectWatcher {
 
   async _broadcast() {
     if (this.clients.size === 0) return;
-    const [changes, tree] = await Promise.all([
+    const [changes, tree, remote] = await Promise.all([
       getChanges(this.projectId),
       Promise.resolve(getFileTree(this.projectId)),
+      getRemoteStatus(this.projectId).catch(() => null),
     ]);
+
+    // A git op touches many paths at once; only tell clients when the answer
+    // actually moved, so the changes list doesn't churn under the user.
+    const changesJson = JSON.stringify(changes);
+    const changesChanged = changesJson !== this._lastChanges;
+    this._lastChanges = changesJson;
+    const remoteJson = JSON.stringify(remote);
+    const remoteChanged = remoteJson !== this._lastRemote;
+    this._lastRemote = remoteJson;
 
     const wasStale = staleProjects.has(this.projectId);
     if (runStartTimes.has(this.projectId) && !wasStale) {
@@ -54,7 +90,8 @@ class ProjectWatcher {
     this._hasCompose = hasCompose;
 
     for (const res of this.clients) {
-      if (changes !== null) sendEvent(res, 'changes', changes);
+      if (changes !== null && changesChanged) sendEvent(res, 'changes', changes);
+      if (remoteChanged) sendEvent(res, 'remote-status', remote);
       sendEvent(res, 'files', tree ?? []);
       if (nowStale) sendEvent(res, 'stale', { stale: true });
       if (composeChanged) sendEvent(res, 'compose', { hasCompose });

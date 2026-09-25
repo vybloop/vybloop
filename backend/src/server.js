@@ -858,11 +858,13 @@ app.get('/api/projects/:id/events', async (req, res) => {
   res.flushHeaders();
 
   // Send initial snapshot immediately
-  const [changes, tree] = await Promise.all([
+  const [changes, tree, remote] = await Promise.all([
     getChanges(req.params.id),
     Promise.resolve(getFileTree(req.params.id)),
+    getRemoteStatus(req.params.id).catch(() => null),
   ]);
   if (changes !== null) res.write(`event: changes\ndata: ${JSON.stringify(changes)}\n\n`);
+  res.write(`event: remote-status\ndata: ${JSON.stringify(remote)}\n\n`);
   res.write(`event: files\ndata: ${JSON.stringify(tree ?? [])}\n\n`);
   if (isProjectStale(req.params.id)) res.write(`event: stale\ndata: ${JSON.stringify({ stale: true })}\n\n`);
 
