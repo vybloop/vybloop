@@ -1168,6 +1168,10 @@ class LoopProjectScreen extends LitElement {
     #xterm-shell-container {
       flex: 1;
       min-height: 0;
+      /* Touch drags are turned into wheel scrolling by _attachTouchScroll; the
+         browser must not start its own pan (or pull-to-refresh) first, since a
+         touchmove can't be cancelled once native scrolling has begun. */
+      touch-action: none;
     }
     #xterm-container .xterm,
     #xterm-container .xterm-viewport,
@@ -2242,7 +2246,91 @@ class LoopProjectScreen extends LitElement {
     if (isAgent) { this._term = term; this._termFit = fit; }
     else { this._shellTerm = term; this._shellFit = fit; }
 
+    this._attachTouchScroll(el, () => (isAgent ? this._term : this._shellTerm));
+
     this._connectWs(kind);
+  }
+
+  // Touch-drag scrolling for a terminal container. xterm.js only scrolls on
+  // touch when the app hasn't enabled mouse tracking *and* the buffer has
+  // scrollback — so in Claude Code (mouse mode) or vim/less (alt buffer) a swipe
+  // does nothing. Instead, turn the drag into synthetic wheel events on the
+  // terminal element: xterm then does exactly what it does for a mouse wheel in
+  // every mode (scroll the viewport, send wheel reports, or send arrow keys).
+  // Listeners sit on the container in the capture phase so xterm's own touch
+  // handlers never see a drag and can't double-scroll. Taps are left alone so
+  // they still focus the terminal. The container outlives a disposed terminal
+  // (it is re-initialised in place), hence the once-per-element guard and the
+  // `getTerm` lookup.
+  _attachTouchScroll(el, getTerm) {
+    if (el._touchScroll) return;
+    el._touchScroll = true;
+
+    let lastY = 0, lastX = 0, startY = 0, startX = 0;
+    let dragging = false, tracking = false;
+    let samples = [];        // recent { t, y } for release velocity
+    let momentum = 0;        // rAF id of the fling animation
+
+    const wheel = (deltaY, x, y) => {
+      const target = getTerm()?.element;
+      if (!target || !deltaY) return;
+      target.dispatchEvent(new WheelEvent('wheel', {
+        deltaY, deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        clientX: x, clientY: y, bubbles: true, cancelable: true,
+      }));
+    };
+    const stopMomentum = () => { cancelAnimationFrame(momentum); momentum = 0; };
+
+    el.addEventListener('touchstart', (e) => {
+      stopMomentum();
+      if (e.touches.length !== 1) { tracking = false; return; }
+      const t = e.touches[0];
+      startX = lastX = t.clientX;
+      startY = lastY = t.clientY;
+      samples = [{ t: e.timeStamp, y: t.clientY }];
+      dragging = false;
+      tracking = true;
+    }, { capture: true, passive: true });
+
+    el.addEventListener('touchmove', (e) => {
+      if (!tracking || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      if (!dragging) {
+        const dy = Math.abs(t.clientY - startY), dx = Math.abs(t.clientX - startX);
+        if (dy < 8 || dy < dx) return;   // not (yet) a vertical scroll
+        dragging = true;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      // Finger moving up reveals later lines, i.e. a positive wheel delta.
+      wheel(lastY - t.clientY, t.clientX, t.clientY);
+      lastX = t.clientX;
+      lastY = t.clientY;
+      samples.push({ t: e.timeStamp, y: t.clientY });
+      while (samples.length > 2 && e.timeStamp - samples[0].t > 100) samples.shift();
+    }, { capture: true, passive: false });
+
+    const end = () => {
+      if (!tracking) return;
+      tracking = false;
+      if (!dragging) return;
+      // Fling: keep scrolling with the release velocity, decaying each frame.
+      const first = samples[0], last = samples[samples.length - 1];
+      const dt = last.t - first.t;
+      let v = dt > 0 ? (first.y - last.y) / dt : 0;   // px/ms, positive = down
+      if (Math.abs(v) < 0.3) return;
+      let prev = performance.now();
+      const step = (now) => {
+        const elapsed = Math.min(now - prev, 50);
+        prev = now;
+        wheel(v * elapsed, lastX, lastY);
+        v *= Math.pow(0.95, elapsed / 16);
+        momentum = Math.abs(v) > 0.05 ? requestAnimationFrame(step) : 0;
+      };
+      momentum = requestAnimationFrame(step);
+    };
+    el.addEventListener('touchend', end, { capture: true });
+    el.addEventListener('touchcancel', end, { capture: true });
   }
 
   _connectWs(kind = 'agent') {
