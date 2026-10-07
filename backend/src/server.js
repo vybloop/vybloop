@@ -40,6 +40,11 @@ import {
   uploadFiles,
   uploadFile,
   createFolder,
+  getProjectFolders,
+  createProjectFolder,
+  renameProjectFolder,
+  deleteProjectFolder,
+  setProjectFolder,
   createFile,
   renameItem,
   deleteItem,
@@ -411,6 +416,34 @@ app.post('/api/projects/:id/workstreams', (req, res) => {
   const result = createWorkstream(req.params.id, name);
   if (result.error) return res.status(result.code || 400).json({ error: result.error });
   res.status(201).json(result);
+});
+
+// Project folders: a home-screen-only grouping of top-level projects.
+app.get('/api/folders', (req, res) => {
+  res.json(getProjectFolders());
+});
+
+app.post('/api/folders', (req, res) => {
+  const result = createProjectFolder(req.body?.name);
+  if (result.error) return res.status(result.code || 400).json({ error: result.error });
+  res.status(201).json(result);
+});
+
+app.patch('/api/folders/:folderId', (req, res) => {
+  const result = renameProjectFolder(req.params.folderId, req.body?.name);
+  if (result.error) return res.status(result.code || 400).json({ error: result.error });
+  res.json(result);
+});
+
+app.delete('/api/folders/:folderId', (req, res) => {
+  if (!deleteProjectFolder(req.params.folderId)) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
+});
+
+app.post('/api/projects/:id/folder', (req, res) => {
+  const result = setProjectFolder(req.params.id, req.body?.folderId ?? null);
+  if (result.error) return res.status(result.code || 400).json({ error: result.error });
+  res.json(result);
 });
 
 app.get('/api/projects/:id/changes', async (req, res) => {

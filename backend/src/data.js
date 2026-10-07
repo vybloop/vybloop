@@ -24,7 +24,7 @@ const DEFAULT_TIMEZONE = 'America/Los_Angeles';
 export const AGENT_CLIS = ['claude', 'codex'];
 
 const DEFAULT_CONFIG = { terminalMode: 'direct', agentCli: 'claude', gitName: '', gitEmail: '', githubPat: '', portRange: '22000-23000', nextPort: 22000, timezone: DEFAULT_TIMEZONE };
-const DEFAULT_DB = { projects: [], config: { ...DEFAULT_CONFIG } };
+const DEFAULT_DB = { projects: [], folders: [], config: { ...DEFAULT_CONFIG } };
 
 function load() {
   try {
@@ -33,6 +33,7 @@ function load() {
     if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_DB };
     return {
       projects: parsed.projects ?? [],
+      folders: parsed.folders ?? [],
       config: { ...DEFAULT_CONFIG, ...(parsed.config ?? {}) },
     };
   } catch {
@@ -47,6 +48,7 @@ function save(db) {
 
 const db = load();
 let projects = db.projects.map(({ status, ...p }) => p);
+let folders = db.folders;
 let config = db.config;
 
 // Make the persisted PAT available to git-auth's fallback ("PAT mode").
@@ -63,6 +65,7 @@ const projectErrors = {};
 
 function persist() {
   db.projects = projects;
+  db.folders = folders;
   db.config = config;
   save(db);
 }
@@ -783,6 +786,62 @@ export function deleteProject(id) {
     console.log(`[delete] ${target}: removed`);
   }
   return { ok: true };
+}
+
+// --- Folders -----------------------------------------------------------------
+//
+// Folders are a purely organisational layer on the home screen: one level deep,
+// holding top-level projects via the project row's optional `folderId`.
+// Workstreams follow their parent and never carry a folderId themselves.
+// Nothing outside the home screen is aware of them.
+
+export function getProjectFolders() {
+  return folders;
+}
+
+export function createProjectFolder(name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return { error: 'name is required', code: 400 };
+  const base = slugify(trimmed) || 'folder';
+  let id = base;
+  for (let n = 2; folders.some(f => f.id === id); n++) id = `${base}-${n}`;
+  const folder = { id, name: trimmed };
+  folders.push(folder);
+  persist();
+  return folder;
+}
+
+export function renameProjectFolder(id, name) {
+  const folder = folders.find(f => f.id === id);
+  if (!folder) return { error: 'not found', code: 404 };
+  const trimmed = (name || '').trim();
+  if (!trimmed) return { error: 'name is required', code: 400 };
+  folder.name = trimmed;
+  persist();
+  return folder;
+}
+
+// Deleting a folder never deletes projects — its projects move back to the top level.
+export function deleteProjectFolder(id) {
+  if (!folders.some(f => f.id === id)) return null;
+  folders = folders.filter(f => f.id !== id);
+  for (const p of projects) {
+    if (p.folderId === id) delete p.folderId;
+  }
+  persist();
+  return { ok: true };
+}
+
+// Move a top-level project into a folder, or out of any folder with a null folderId.
+export function setProjectFolder(id, folderId) {
+  const project = projects.find(p => p.id === id);
+  if (!project) return { error: 'not found', code: 404 };
+  if (project.parentId) return { error: 'workstreams follow their project', code: 400 };
+  if (folderId && !folders.some(f => f.id === folderId)) return { error: 'unknown folder', code: 400 };
+  if (folderId) project.folderId = folderId;
+  else delete project.folderId;
+  persist();
+  return { id, folderId: project.folderId ?? null };
 }
 
 // Ids of a project's workstreams — used by server.js to tear down their live

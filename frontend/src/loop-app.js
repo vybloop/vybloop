@@ -47,10 +47,13 @@ class LoopApp extends LitElement {
     // Opening a second EventSource on the same endpoint here cost a permanent
     // slot in the browser's six-connections-per-origin budget for no new data,
     // which is what left shared images stuck "loading" until a refresh.
-    this.addEventListener('project-runtime', (e) => {
+    const patchProject = (e) => {
       const { id, ...patch } = e.detail;
       this._projects = this._projects.map(p => p.id === id ? { ...p, ...patch } : p);
-    });
+    };
+    this.addEventListener('project-runtime', patchProject);
+    // Persisted edits made elsewhere (e.g. the home screen moving a project into a folder).
+    this.addEventListener('project-updated', patchProject);
     this.addEventListener('navigate-new', () => this._navigate('new', null));
     this.addEventListener('navigate-home', () => this._navigate('home', null));
     this.addEventListener('navigate-project', (e) => this._navigate('project', e.detail.id));

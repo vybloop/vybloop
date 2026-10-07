@@ -2,8 +2,11 @@ import { LitElement, html, css } from 'lit';
 import './loop-top-bar.js';
 import {
   iconPlus, iconSearch, iconGrid, iconList, iconGit, iconBranch, iconChevron,
-  iconMore, iconTrash
+  iconMore, iconTrash, iconFolder, iconFolderPlus, iconPencil
 } from './icons.js';
+
+// Which folders / projects the viewer has collapsed on the home screen.
+const COLLAPSED_KEY = 'loop.home.collapsed';
 
 const _isMac = /Macintosh|MacIntel/.test(navigator.userAgent);
 const _isMobile = window.matchMedia('(pointer: coarse)').matches;
@@ -19,6 +22,10 @@ class LoopHomeScreen extends LitElement {
     _menuFor: { state: true },
     _dialog: { state: true },
     _deleting: { state: true },
+    _folders: { state: true },
+    _collapsed: { state: true },
+    _dragId: { state: true },
+    _dropTarget: { state: true },
   };
 
   static styles = css`
@@ -73,6 +80,30 @@ class LoopHomeScreen extends LitElement {
     }
     .btn-primary:hover {
       opacity: 0.9;
+    }
+    .header-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      background: var(--bg-2);
+      color: var(--fg-1);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 500;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+      white-space: nowrap;
+    }
+    .btn-secondary:hover {
+      background: var(--bg-3);
+      color: var(--fg-0);
     }
     .toolbar {
       display: flex;
@@ -416,13 +447,101 @@ class LoopHomeScreen extends LitElement {
       color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: 12px;
-      padding-left: 12px;
     }
     .ws-indent {
       display: inline-flex;
       color: var(--fg-3);
     }
     .ws-indent svg { width: 12px; height: 12px; }
+
+    /* Folders & tree */
+    .tree-toggle, .tree-spacer {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .tree-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--fg-3);
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .tree-toggle:hover { background: var(--bg-3); color: var(--fg-1); }
+    .tree-toggle svg { width: 14px; height: 14px; transition: transform 0.12s; }
+    .tree-toggle.open svg { transform: rotate(90deg); }
+    .folder-glyph {
+      display: flex;
+      color: var(--fg-2);
+    }
+    .folder-row td { background: var(--bg-1); }
+    .folder-row .table-name { font-weight: 600; }
+    .folder-count {
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--fg-3);
+    }
+    .project-table tr.drop-target td,
+    .folder-section.drop-target .folder-header {
+      background: var(--accent-soft);
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
+    .project-table tr.dragging td,
+    .project-card.dragging { opacity: 0.4; }
+    .empty-folder-row td {
+      color: var(--fg-3);
+      font-size: 12px;
+      font-style: italic;
+      cursor: default;
+    }
+    .project-table tr.empty-folder-row:hover td { background: transparent; }
+    .folder-section { margin-bottom: 16px; }
+    .folder-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      margin-bottom: 10px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.1s;
+    }
+    .folder-header:hover { background: var(--bg-2); }
+    .folder-header-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--fg-0);
+    }
+    .folder-header .menu-wrap { margin-left: auto; }
+    .folder-empty {
+      border: 1.5px dashed var(--line);
+      border-radius: var(--radius);
+      padding: 20px;
+      text-align: center;
+      color: var(--fg-3);
+      font-size: 12px;
+    }
+    .root-dropzone {
+      border: 1.5px dashed var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      margin-bottom: 12px;
+      text-align: center;
+      color: var(--fg-3);
+      font-size: 12px;
+      transition: border-color 0.1s, background 0.1s, color 0.1s;
+    }
+    .root-dropzone.drop-target {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
 
     /* "..." menu */
     .menu-wrap {
@@ -474,8 +593,20 @@ class LoopHomeScreen extends LitElement {
       transition: background 0.1s;
     }
     .ctx-menu-item:hover { background: var(--bg-3); }
+    .ctx-menu-item svg { width: 14px; height: 14px; flex-shrink: 0; }
     .ctx-menu-item.danger { color: var(--del); }
-    .ctx-menu-item.danger svg { width: 14px; height: 14px; }
+    .ctx-menu-sep {
+      height: 1px;
+      margin: 4px 0;
+      background: var(--line-soft);
+    }
+    .ctx-menu-label {
+      padding: 4px 10px 2px;
+      font-size: 11px;
+      color: var(--fg-3);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
 
     /* Delete dialog */
     .dialog-overlay {
@@ -522,6 +653,25 @@ class LoopHomeScreen extends LitElement {
       font-size: 12px;
       line-height: 1.5;
     }
+    .dialog-input {
+      height: 34px;
+      box-sizing: border-box;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      color: var(--fg-0);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      padding: 0 10px;
+      outline: none;
+    }
+    .dialog-input:focus { border-color: var(--accent); }
+    .dialog-btn-primary {
+      background: var(--accent);
+      color: var(--accent-fg);
+      border-color: transparent;
+    }
+    .dialog-btn-primary:hover:not(:disabled) { background: var(--accent); opacity: 0.9; }
     .dialog-error {
       font-size: 11px;
       color: var(--del);
@@ -563,8 +713,12 @@ class LoopHomeScreen extends LitElement {
     this._sortKey = 'lastActivity';   // 'name' | 'status' | 'changes' | 'lastActivity'
     this._sortDir = 'desc';           // 'asc' | 'desc'
     this._menuFor = null;   // project id whose "..." menu is open
-    this._dialog = null;    // null | { type: 'delete-project', project, error }
+    this._dialog = null;    // null | { type: 'delete-project' | 'folder-name' | 'delete-folder', ... }
     this._deleting = false;
+    this._folders = [];
+    this._collapsed = this._loadCollapsed();  // Set of 'f:<folderId>' / 'p:<projectId>'
+    this._dragId = null;      // project id being dragged
+    this._dropTarget = null;  // folder id under the drag, '' for top level, null for none
     this._boundKeydown = this._handleKeydown.bind(this);
     this._boundCloseMenu = () => { if (this._menuFor) this._menuFor = null; };
   }
@@ -573,12 +727,21 @@ class LoopHomeScreen extends LitElement {
     super.connectedCallback();
     document.addEventListener('keydown', this._boundKeydown);
     document.addEventListener('click', this._boundCloseMenu);
+    this._fetchFolders();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener('keydown', this._boundKeydown);
     document.removeEventListener('click', this._boundCloseMenu);
+  }
+
+  updated(changed) {
+    if (changed.has('_dialog') && this._dialog?.type === 'folder-name' && changed.get('_dialog')?.type !== 'folder-name') {
+      const input = this.shadowRoot.querySelector('.dialog-input');
+      input?.focus();
+      input?.select();
+    }
   }
 
   _handleKeydown(e) {
@@ -605,6 +768,246 @@ class LoopHomeScreen extends LitElement {
 
   _workstreamsOf(projectId) {
     return this.projects.filter(p => p.parentId === projectId);
+  }
+
+  // The folder a top-level project is shown in — null for the top level,
+  // including a stale folderId whose folder no longer exists.
+  _folderOf(p) {
+    return p.folderId && this._folders.some(f => f.id === p.folderId) ? p.folderId : null;
+  }
+
+  // Split the (search-filtered) projects into folder groups plus the ungrouped
+  // rest. Empty folders stay visible so projects can be dragged into them, but
+  // while searching a folder only shows up if it or one of its projects matches
+  // (a folder-name match shows all of its projects).
+  _groups(filtered) {
+    const q = this._search.trim().toLowerCase();
+    const matched = new Set(filtered.map(p => p.id));
+    const roots = this.projects.filter(p => !p.parentId);
+    const folders = this._folders.map(folder => {
+      const all = roots.filter(p => this._folderOf(p) === folder.id);
+      const nameHit = !!q && folder.name.toLowerCase().includes(q);
+      return { folder, nameHit, projects: nameHit ? all : all.filter(p => matched.has(p.id)) };
+    }).filter(g => !q || g.nameHit || g.projects.length > 0);
+    const ungrouped = filtered.filter(p => !this._folderOf(p));
+    return { folders, ungrouped };
+  }
+
+  // A folder's row in the list sorts and summarises like a project: running if
+  // anything in it runs, total changes, most recent activity.
+  _folderSummary(folder, projects) {
+    const all = projects.flatMap(p => [p, ...this._workstreamsOf(p.id)]);
+    const status = all.some(p => p.status === 'running') ? 'running'
+      : all.some(p => p.status === 'error') ? 'error' : 'idle';
+    const lastActivity = all.reduce((max, p) => {
+      const t = new Date(p.lastActivity).getTime();
+      return Number.isNaN(t) || t < max ? max : t;
+    }, 0);
+    return {
+      name: folder.name,
+      status,
+      changes: all.reduce((n, p) => n + (p.changes || 0), 0),
+      lastActivity: lastActivity ? new Date(lastActivity).toISOString() : null,
+    };
+  }
+
+  // --- Collapse state ---------------------------------------------------------
+  // Everything starts expanded; the viewer's collapsed folders/projects are
+  // remembered in localStorage. A search expands everything so matches show.
+
+  _loadCollapsed() {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]'));
+    } catch {
+      return new Set();
+    }
+  }
+
+  _isCollapsed(key) {
+    return !this._search.trim() && this._collapsed.has(key);
+  }
+
+  _toggleCollapsed(e, key) {
+    e?.stopPropagation();
+    const next = new Set(this._collapsed);
+    if (!next.delete(key)) next.add(key);
+    this._collapsed = next;
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+    } catch { /* storage unavailable — collapse state just won't persist */ }
+  }
+
+  _renderToggle(key, hasChildren) {
+    if (!hasChildren) return html`<span class="tree-spacer"></span>`;
+    const open = !this._isCollapsed(key);
+    return html`
+      <button
+        class="tree-toggle ${open ? 'open' : ''}"
+        title=${open ? 'Collapse' : 'Expand'}
+        @click=${e => this._toggleCollapsed(e, key)}
+      >${iconChevron}</button>
+    `;
+  }
+
+  // --- Folders ------------------------------------------------------------------
+
+  async _fetchFolders() {
+    try {
+      const res = await fetch('/api/folders');
+      if (res.ok) this._folders = await res.json();
+    } catch (e) {
+      console.warn('Could not fetch folders', e);
+    }
+  }
+
+  _sortedFolderGroups(groups) {
+    const withSummary = groups.map(g => ({ ...g, summary: this._folderSummary(g.folder, g.projects) }));
+    const order = this._sorted(withSummary.map(g => g.summary));
+    return order.map(sum => withSummary.find(g => g.summary === sum));
+  }
+
+  _openNewFolderDialog() {
+    this._dialog = { type: 'folder-name', folder: null, name: '' };
+  }
+
+  _openRenameFolderDialog(e, folder) {
+    e.stopPropagation();
+    this._menuFor = null;
+    this._dialog = { type: 'folder-name', folder, name: folder.name };
+  }
+
+  _openDeleteFolderDialog(e, folder) {
+    e.stopPropagation();
+    this._menuFor = null;
+    const count = this.projects.filter(p => !p.parentId && this._folderOf(p) === folder.id).length;
+    this._dialog = { type: 'delete-folder', folder, count };
+  }
+
+  async _saveFolderName() {
+    const d = this._dialog;
+    const name = (d?.name || '').trim();
+    if (!name || this._deleting) return;
+    this._deleting = true;
+    try {
+      const res = d.folder
+        ? await fetch(`/api/folders/${d.folder.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+          })
+        : await fetch('/api/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+          });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'Failed to save folder');
+      this._folders = d.folder
+        ? this._folders.map(f => f.id === body.id ? body : f)
+        : [...this._folders, body];
+      this._dialog = null;
+    } catch (e) {
+      console.error('Failed to save folder', e);
+      this._dialog = { ...this._dialog, error: e.message };
+    } finally {
+      this._deleting = false;
+    }
+  }
+
+  // Deleting a folder keeps its projects: the backend moves them to the top level.
+  async _deleteFolder() {
+    const folder = this._dialog?.folder;
+    if (!folder || this._deleting) return;
+    this._deleting = true;
+    try {
+      const res = await fetch(`/api/folders/${folder.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to delete folder');
+      }
+      this._folders = this._folders.filter(f => f.id !== folder.id);
+      for (const p of this.projects.filter(p => p.folderId === folder.id)) {
+        this._emitProjectUpdate(p.id, { folderId: null });
+      }
+      this._dialog = null;
+    } catch (e) {
+      console.error('Failed to delete folder', e);
+      this._dialog = { ...this._dialog, error: e.message };
+    } finally {
+      this._deleting = false;
+    }
+  }
+
+  _emitProjectUpdate(id, patch) {
+    this.dispatchEvent(new CustomEvent('project-updated', {
+      detail: { id, ...patch },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  // Optimistic: the project moves right away and moves back if the save fails.
+  async _moveToFolder(id, folderId) {
+    const project = this.projects.find(p => p.id === id);
+    if (!project || project.parentId) return;
+    const prev = this._folderOf(project);
+    if (prev === (folderId || null)) return;
+    this._emitProjectUpdate(id, { folderId: folderId || null });
+    try {
+      const res = await fetch(`/api/projects/${id}/folder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderId: folderId || null }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to move project');
+      }
+    } catch (e) {
+      console.error('Failed to move project', e);
+      this._emitProjectUpdate(id, { folderId: prev });
+    }
+  }
+
+  // --- Drag and drop ------------------------------------------------------------
+  // Top-level projects drag; folders (and any row or card inside one) are drop
+  // targets, as is the top level ('' — its rows/cards and the "move out" zone).
+
+  _onDragStart(e, p) {
+    e.stopPropagation();
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', p.id);
+    this._menuFor = null;
+    // Defer so the browser snapshots the drag image before the row dims.
+    requestAnimationFrame(() => { this._dragId = p.id; });
+  }
+
+  _onDragEnd() {
+    this._dragId = null;
+    this._dropTarget = null;
+  }
+
+  _onDragOver(e, folderId) {
+    const dragged = this._dragId && this.projects.find(p => p.id === this._dragId);
+    if (!dragged) return;
+    e.stopPropagation();
+    // Not calling preventDefault leaves the drop disallowed — nothing to do when
+    // the project is already there.
+    if (this._folderOf(dragged) === (folderId || null)) {
+      this._dropTarget = null;
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    this._dropTarget = folderId;
+  }
+
+  _onDrop(e, folderId) {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = this._dragId;
+    this._onDragEnd();
+    if (id) this._moveToFolder(id, folderId);
   }
 
   // Sorting is a view concern only — it reorders top-level rows and, within each
@@ -765,12 +1168,122 @@ class LoopHomeScreen extends LitElement {
         >${iconMore}</button>
         ${this._menuFor === p.id ? html`
           <div class="ctx-menu">
+            ${this._renderMoveItems(p)}
             <button class="ctx-menu-item danger" @click=${e => this._openDeleteDialog(e, p)}>
               ${iconTrash}
               Delete ${p.parentId ? 'workstream' : 'project'}
             </button>
           </div>
         ` : ''}
+      </div>
+    `;
+  }
+
+  // "Move to" entries in a project's menu — the non-drag way to file a project
+  // (and the only one on touch devices).
+  _renderMoveItems(p) {
+    if (p.parentId) return '';
+    const current = this._folderOf(p);
+    const targets = this._folders.filter(f => f.id !== current);
+    if (targets.length === 0 && !current) return '';
+    const move = (e, folderId) => {
+      e.stopPropagation();
+      this._menuFor = null;
+      this._moveToFolder(p.id, folderId);
+    };
+    return html`
+      <div class="ctx-menu-label">Move to</div>
+      ${targets.map(f => html`
+        <button class="ctx-menu-item" @click=${e => move(e, f.id)}>${iconFolder}${f.name}</button>
+      `)}
+      ${current ? html`
+        <button class="ctx-menu-item" @click=${e => move(e, null)}>${iconList}Top level</button>
+      ` : ''}
+      <div class="ctx-menu-sep"></div>
+    `;
+  }
+
+  _renderFolderMenu(folder) {
+    const key = `folder:${folder.id}`;
+    return html`
+      <div class="menu-wrap" @click=${e => e.stopPropagation()}>
+        <button
+          class="menu-btn ${this._menuFor === key ? 'active' : ''}"
+          title="Folder actions"
+          @click=${e => this._toggleMenu(e, key)}
+        >${iconMore}</button>
+        ${this._menuFor === key ? html`
+          <div class="ctx-menu">
+            <button class="ctx-menu-item" @click=${e => this._openRenameFolderDialog(e, folder)}>
+              ${iconPencil}
+              Rename folder
+            </button>
+            <button class="ctx-menu-item danger" @click=${e => this._openDeleteFolderDialog(e, folder)}>
+              ${iconTrash}
+              Delete folder
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  _renderFolderNameDialog() {
+    const d = this._dialog;
+    if (d?.type !== 'folder-name') return '';
+    const renaming = !!d.folder;
+    const close = () => { if (!this._deleting) this._dialog = null; };
+    return html`
+      <div class="dialog-overlay" @click=${close}>
+        <div class="dialog-box" @click=${e => e.stopPropagation()}>
+          <div class="dialog-title">${renaming ? 'Rename folder' : 'New folder'}</div>
+          <input
+            class="dialog-input"
+            type="text"
+            placeholder="Folder name"
+            .value=${d.name}
+            @input=${e => this._dialog = { ...this._dialog, name: e.target.value, error: null }}
+            @keydown=${e => {
+              if (e.key === 'Enter') this._saveFolderName();
+              else if (e.key === 'Escape') close();
+            }}
+          />
+          ${d.error ? html`<div class="dialog-error">${d.error}</div>` : ''}
+          <div class="dialog-actions">
+            <button class="dialog-btn" @click=${close} ?disabled=${this._deleting}>Cancel</button>
+            <button
+              class="dialog-btn dialog-btn-primary"
+              @click=${this._saveFolderName}
+              ?disabled=${this._deleting || !d.name.trim()}
+            >${renaming ? 'Rename' : 'Create folder'}</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderDeleteFolderDialog() {
+    const d = this._dialog;
+    if (d?.type !== 'delete-folder') return '';
+    const close = () => { if (!this._deleting) this._dialog = null; };
+    return html`
+      <div class="dialog-overlay" @click=${close}>
+        <div class="dialog-box" @click=${e => e.stopPropagation()}>
+          <div class="dialog-title">Delete folder</div>
+          <div class="dialog-body">
+            Delete the folder <strong>${d.folder.name}</strong>?
+            ${d.count > 0
+              ? html`Its ${d.count} project${d.count === 1 ? '' : 's'} will move back to the top level — no projects are deleted.`
+              : 'It is empty.'}
+          </div>
+          ${d.error ? html`<div class="dialog-error">${d.error}</div>` : ''}
+          <div class="dialog-actions">
+            <button class="dialog-btn" @click=${close} ?disabled=${this._deleting}>Cancel</button>
+            <button class="dialog-btn dialog-btn-danger" @click=${this._deleteFolder} ?disabled=${this._deleting}>
+              ${this._deleting ? 'Deleting…' : 'Delete folder'}
+            </button>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -841,8 +1354,17 @@ class LoopHomeScreen extends LitElement {
   }
 
   _renderCard(p) {
+    const folderId = this._folderOf(p) || '';
     return html`
-      <div class="project-card" @click=${() => this._navigateProject(p.id)}>
+      <div
+        class="project-card ${this._dragId === p.id ? 'dragging' : ''}"
+        draggable="true"
+        @dragstart=${e => this._onDragStart(e, p)}
+        @dragend=${this._onDragEnd}
+        @dragover=${e => this._onDragOver(e, folderId)}
+        @drop=${e => this._onDrop(e, folderId)}
+        @click=${() => this._navigateProject(p.id)}
+      >
         <div class="card-top">
           <div>
             <div class="card-glyph">${this._glyph(p.name)}</div>
@@ -873,20 +1395,133 @@ class LoopHomeScreen extends LitElement {
     `;
   }
 
-  _renderGrid(filtered) {
+  // While a filed project is being dragged, a zone to drop it back to the top level.
+  _renderRootDropzone() {
+    const dragged = this._dragId && this.projects.find(p => p.id === this._dragId);
+    if (!dragged || !this._folderOf(dragged)) return '';
     return html`
+      <div
+        class="root-dropzone ${this._dropTarget === '' ? 'drop-target' : ''}"
+        @dragover=${e => this._onDragOver(e, '')}
+        @drop=${e => this._onDrop(e, '')}
+      >Drop here to move out of the folder</div>
+    `;
+  }
+
+  _renderGrid({ folders, ungrouped }) {
+    return html`
+      ${this._renderRootDropzone()}
+      ${this._sortedFolderGroups(folders).map(({ folder, projects }) => {
+        const key = `f:${folder.id}`;
+        const open = !this._isCollapsed(key);
+        return html`
+          <div
+            class="folder-section ${this._dropTarget === folder.id ? 'drop-target' : ''}"
+            @dragover=${e => this._onDragOver(e, folder.id)}
+            @drop=${e => this._onDrop(e, folder.id)}
+          >
+            <div class="folder-header" @click=${e => this._toggleCollapsed(e, key)}>
+              ${this._renderToggle(key, true)}
+              <span class="folder-glyph">${iconFolder}</span>
+              <span class="folder-header-name">${folder.name}</span>
+              <span class="folder-count">${projects.length}</span>
+              ${this._renderFolderMenu(folder)}
+            </div>
+            ${open ? (projects.length > 0 ? html`
+              <div class="project-grid">
+                ${this._sorted(projects).map(p => this._renderCard(p))}
+              </div>
+            ` : html`<div class="folder-empty">Empty — drag projects here</div>`) : ''}
+          </div>
+        `;
+      })}
       <div class="project-grid">
         <div class="new-card" @click=${this._navigateNew}>
           <div class="new-card-icon">${iconPlus}</div>
           <span>New project</span>
         </div>
-        ${filtered.map(p => this._renderCard(p))}
+        ${this._sorted(ungrouped).map(p => this._renderCard(p))}
       </div>
     `;
   }
 
-  _renderList(filtered) {
+  _branchChip(branch) {
     return html`
+      <span class="branch-chip">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
+          <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
+        </svg>
+        ${branch}
+      </span>
+    `;
+  }
+
+  _changesCell(changes) {
+    return changes > 0
+      ? html`<span class="changes-badge">${changes} changes</span>`
+      : html`<span style="color:var(--fg-3)">—</span>`;
+  }
+
+  // Tree depth → left padding of the name cell.
+  _indent(level) {
+    return `padding-left:${12 + level * 22}px`;
+  }
+
+  // A project row, then (unless collapsed) its workstream rows one level deeper.
+  _renderProjectRows(p, level) {
+    const folderId = this._folderOf(p) || '';
+    const workstreams = this._workstreamsOf(p.id);
+    const key = `p:${p.id}`;
+    const drop = {
+      over: e => this._onDragOver(e, folderId),
+      drop: e => this._onDrop(e, folderId),
+    };
+    return html`
+      <tr
+        class=${this._dragId === p.id ? 'dragging' : ''}
+        draggable="true"
+        @dragstart=${e => this._onDragStart(e, p)}
+        @dragend=${this._onDragEnd}
+        @dragover=${drop.over}
+        @drop=${drop.drop}
+        @click=${() => this._navigateProject(p.id)}
+      >
+        <td style=${this._indent(level)}>
+          <div class="table-name">
+            ${this._renderToggle(key, workstreams.length > 0)}
+            <div class="table-glyph">${this._glyph(p.name)}</div>
+            ${p.name}
+          </div>
+        </td>
+        <td>${this._branchChip(p.branch)}</td>
+        <td>${this._renderStatusPill(p.status)}</td>
+        <td>${this._changesCell(p.changes)}</td>
+        <td style="color:var(--fg-3)">${this._relativeTime(p.lastActivity)}</td>
+        <td class="table-menu-cell">${this._renderMenu(p)}</td>
+      </tr>
+      ${this._isCollapsed(key) ? '' : this._sorted(workstreams).map(ws => html`
+        <tr class="ws-row" @dragover=${drop.over} @drop=${drop.drop} @click=${() => this._navigateProject(ws.id)}>
+          <td style=${this._indent(level + 1)}>
+            <div class="table-name ws-name">
+              <span class="tree-spacer"></span>
+              <span class="ws-indent">${iconBranch}</span>
+              ${ws.workstream}
+            </div>
+          </td>
+          <td>${this._branchChip(ws.branch)}</td>
+          <td>${this._renderStatusPill(ws.status)}</td>
+          <td>${this._changesCell(ws.changes)}</td>
+          <td style="color:var(--fg-3)">${this._relativeTime(ws.lastActivity)}</td>
+          <td class="table-menu-cell">${this._renderMenu(ws)}</td>
+        </tr>
+      `)}
+    `;
+  }
+
+  _renderList({ folders, ungrouped }) {
+    return html`
+      ${this._renderRootDropzone()}
       <table class="project-table">
         <thead>
           <tr>
@@ -899,66 +1534,53 @@ class LoopHomeScreen extends LitElement {
           </tr>
         </thead>
         <tbody>
-          ${this._sorted(filtered).map(p => html`
-            <tr @click=${() => this._navigateProject(p.id)}>
-              <td>
-                <div class="table-name">
-                  <div class="table-glyph">${this._glyph(p.name)}</div>
-                  ${p.name}
-                </div>
-              </td>
-              <td>
-                <span class="branch-chip">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
-                    <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
-                  </svg>
-                  ${p.branch}
-                </span>
-              </td>
-              <td>${this._renderStatusPill(p.status)}</td>
-              <td>${p.changes > 0 ? html`<span class="changes-badge">${p.changes} changes</span>` : html`<span style="color:var(--fg-3)">—</span>`}</td>
-              <td style="color:var(--fg-3)">${this._relativeTime(p.lastActivity)}</td>
-              <td class="table-menu-cell">${this._renderMenu(p)}</td>
-            </tr>
-            ${this._sorted(this._workstreamsOf(p.id)).map(ws => html`
-              <tr class="ws-row" @click=${() => this._navigateProject(ws.id)}>
-                <td>
-                  <div class="table-name ws-name">
-                    <span class="ws-indent">${iconBranch}</span>
-                    ${ws.workstream}
+          ${this._sortedFolderGroups(folders).map(({ folder, projects, summary }) => {
+            const key = `f:${folder.id}`;
+            const over = e => this._onDragOver(e, folder.id);
+            const drop = e => this._onDrop(e, folder.id);
+            return html`
+              <tr
+                class="folder-row ${this._dropTarget === folder.id ? 'drop-target' : ''}"
+                @dragover=${over}
+                @drop=${drop}
+                @click=${e => this._toggleCollapsed(e, key)}
+              >
+                <td style=${this._indent(0)}>
+                  <div class="table-name">
+                    ${this._renderToggle(key, true)}
+                    <span class="folder-glyph">${iconFolder}</span>
+                    ${folder.name}
+                    <span class="folder-count">${projects.length}</span>
                   </div>
                 </td>
-                <td>
-                  <span class="branch-chip">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/>
-                      <path d="M6 7v10"/><path d="M18 11c0 3.5-3 5-6 5"/>
-                    </svg>
-                    ${ws.branch}
-                  </span>
-                </td>
-                <td>${this._renderStatusPill(ws.status)}</td>
-                <td>${ws.changes > 0 ? html`<span class="changes-badge">${ws.changes} changes</span>` : html`<span style="color:var(--fg-3)">—</span>`}</td>
-                <td style="color:var(--fg-3)">${this._relativeTime(ws.lastActivity)}</td>
-                <td class="table-menu-cell">${this._renderMenu(ws)}</td>
+                <td></td>
+                <td>${summary.status === 'idle' ? '' : this._renderStatusPill(summary.status)}</td>
+                <td>${this._changesCell(summary.changes)}</td>
+                <td style="color:var(--fg-3)">${summary.lastActivity ? this._relativeTime(summary.lastActivity) : ''}</td>
+                <td class="table-menu-cell">${this._renderFolderMenu(folder)}</td>
               </tr>
-            `)}
-          `)}
+              ${this._isCollapsed(key) ? '' : projects.length === 0 ? html`
+                <tr class="empty-folder-row" @dragover=${over} @drop=${drop}>
+                  <td colspan="6" style=${this._indent(1)}>Empty — drag projects here</td>
+                </tr>
+              ` : this._sorted(projects).map(p => this._renderProjectRows(p, 1))}
+            `;
+          })}
+          ${this._sorted(ungrouped).map(p => this._renderProjectRows(p, 0))}
         </tbody>
       </table>
     `;
   }
 
   render() {
-    const filtered = this._filtered();
+    const groups = this._groups(this._filtered());
     const running = this.projects.filter(p => p.status === 'running').length;
     const changed = this.projects.filter(p => p.changes > 0).length;
     const workstreams = this.projects.filter(p => p.parentId).length;
 
     return html`
       <loop-top-bar></loop-top-bar>
-      <div class="content">
+      <div class="content" @dragover=${() => { if (this._dragId) this._dropTarget = null; }}>
         <div class="page-header">
           <div class="page-title-group">
             <div class="page-title">Projects</div>
@@ -969,10 +1591,16 @@ class LoopHomeScreen extends LitElement {
               <span>${changed}</span> with changes
             </div>
           </div>
-          <button class="btn-primary" @click=${this._navigateNew}>
-            ${iconPlus}
-            New project
-          </button>
+          <div class="header-actions">
+            <button class="btn-secondary" @click=${this._openNewFolderDialog}>
+              ${iconFolderPlus}
+              New folder
+            </button>
+            <button class="btn-primary" @click=${this._navigateNew}>
+              ${iconPlus}
+              New project
+            </button>
+          </div>
         </div>
         <div class="toolbar">
           <div class="search-wrap">
@@ -995,12 +1623,14 @@ class LoopHomeScreen extends LitElement {
             </button>
           </div>
         </div>
-        ${filtered.length === 0 && this._search
+        ${groups.folders.length === 0 && groups.ungrouped.length === 0 && this._search
           ? html`<div class="empty-state">No projects match "${this._search}"</div>`
-          : this._viewMode === 'grid' ? this._renderGrid(filtered) : this._renderList(filtered)
+          : this._viewMode === 'grid' ? this._renderGrid(groups) : this._renderList(groups)
         }
       </div>
       ${this._renderDeleteDialog()}
+      ${this._renderFolderNameDialog()}
+      ${this._renderDeleteFolderDialog()}
     `;
   }
 }

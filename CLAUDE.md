@@ -36,8 +36,12 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
       "template": "vite-react",
       "port": 22014,                          // stable HOST_PORT for this project
       "agentCli": "codex",                    // optional per-project override of config.agentCli
+      "folderId": "work",                     // optional; home-screen folder (top-level projects only)
       "lastActivity": "2026-05-20T13:58:00Z" // ISO 8601 UTC
     }
+  ],
+  "folders": [
+    { "id": "work", "name": "Work" }         // id slugified from name, de-duplicated with -2, -3…
   ]
 }
 ```
@@ -65,6 +69,11 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `GET` | `/api/projects/:id/workstreams` | List the project's workstreams (default first). |
 | `POST` | `/api/projects/:id/workstreams` | Create a workstream. Body: `{ name }`. Returns 201 with `status: "cloning"`. |
 | `DELETE` | `/api/projects/:id` | Delete a project or workstream (and, for a project, its workstreams). |
+| `POST` | `/api/projects/:id/folder` | Move a top-level project into a folder. Body: `{ folderId }` (`null` = top level). |
+| `GET` | `/api/folders` | List project folders. |
+| `POST` | `/api/folders` | Create a folder. Body: `{ name }`. Returns 201. |
+| `PATCH` | `/api/folders/:folderId` | Rename a folder. Body: `{ name }`. |
+| `DELETE` | `/api/folders/:folderId` | Delete a folder; its projects move back to the top level (never deleted). |
 | `GET` | `/api/templates` | List available project templates. |
 | `GET` | `/api/config` | Get config (e.g. `terminalMode`). |
 | `PATCH` | `/api/config` | Update config. |
@@ -105,6 +114,10 @@ git checkout -b <slug> --no-track origin/<baseBranch>
 Deleting a project deletes its workstreams; `server.js` tears down each child's sessions/watchers/logs/containers first, because `destroyProjectSessions(parentId)`'s `startsWith(\`${id}:\`)` filter does not match child session keys.
 
 Workstreams get their own host port automatically (see "Host ports" below), so several can run at once.
+
+### Folders
+
+A purely organisational, one-level grouping on the home screen (`loop-home-screen.js`). Nothing but the home screen knows about them. A top-level project joins a folder via its `folderId`; workstreams never carry one — they always follow their parent. A `folderId` pointing at a missing folder is treated as top level. Projects are filed by dragging a card/row onto a folder (or any project inside it), or via **Move to** in the project's `…` menu (the only way on touch devices). In both views folders and projects with workstreams expand/collapse; the collapsed set is a per-viewer convenience in `localStorage` (`loop.home.collapsed`), and a search expands everything.
 
 ### Terminal system
 
