@@ -52,6 +52,7 @@ import {
   createWorkstream,
   listWorkstreams,
   getWorkstreamIds,
+  getProjectLabel,
   composeEnv,
   setProjectAgentCli,
   AGENT_CLIS,
@@ -904,11 +905,6 @@ app.get('/api/projects/:id/events', async (req, res) => {
   getOrCreateWatcher(req.params.id).addClient(res);
 });
 
-// SPA fallback
-app.get('*', (req, res) => {
-  res.sendFile(join(__dirname, '../public/index.html'));
-});
-
 // Per-project terminal sessions: Map<`${projectId}:${type}`, TerminalSession>
 // type is 'agent' | 'shell' | 'logs'
 const sessions = new Map();
@@ -1056,6 +1052,90 @@ app.post('/api/sandbox/rebuild', async (req, res) => {
     console.error('Sandbox rebuild failed:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── Volumes ──────────────────────────────────────────────────────────────────
+// Podman volumes created by project compose stacks, so the UI can wipe one back
+// to a clean slate. Compose recreates a missing named volume (empty) on the
+// next `up`, so "delete" doubles as "reset".
+
+const ACTIVE_CONTAINER_STATES = new Set(['running', 'paused', 'restarting', 'stopping']);
+const VOLUME_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
+// volume name -> [{ name, state }] of every container (any state) mounting it.
+async function volumeUsers() {
+  const users = new Map();
+  const { stdout: idsOut } = await execFileAsync('podman', ['ps', '-aq'], { timeout: 30_000 });
+  const ids = idsOut.trim().split('\n').filter(Boolean);
+  if (ids.length === 0) return users;
+  const { stdout } = await execFileAsync('podman', [
+    'inspect', '--format',
+    '{{.Name}}|{{.State.Status}}|{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}},{{end}}{{end}}',
+    ...ids,
+  ], { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }).catch(err => ({ stdout: err.stdout || '' }));
+  for (const line of stdout.trim().split('\n').filter(Boolean)) {
+    const [name, state, mounts = ''] = line.split('|');
+    for (const vol of mounts.split(',').filter(Boolean)) {
+      if (!users.has(vol)) users.set(vol, []);
+      users.get(vol).push({ name, state });
+    }
+  }
+  return users;
+}
+
+async function listVolumes() {
+  const { stdout } = await execFileAsync('podman', ['volume', 'ls', '--format', 'json'], { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 });
+  const volumes = JSON.parse(stdout.trim() || '[]');
+  const users = await volumeUsers();
+  return volumes.map(v => {
+    const project = v.Labels?.['io.podman.compose.project'] || v.Labels?.['com.docker.compose.project'] || null;
+    const containers = users.get(v.Name) || [];
+    return {
+      name: v.Name,
+      createdAt: v.CreatedAt,
+      project,
+      // null when the volume has no compose label, or its project was deleted.
+      projectLabel: project ? getProjectLabel(project) : null,
+      containers,
+      inUse: containers.some(c => ACTIVE_CONTAINER_STATES.has(c.state)),
+    };
+  }).sort((a, b) => (a.project || '￿').localeCompare(b.project || '￿') || a.name.localeCompare(b.name));
+}
+
+app.get('/api/volumes', async (req, res) => {
+  try {
+    res.json(await listVolumes());
+  } catch (err) {
+    console.error('Volume list failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete one volume. Refused while a running container mounts it (stop the
+// project first); stopped containers still referencing it are removed along
+// with it (`-f`) — compose recreates them on the next Run anyway.
+app.delete('/api/volumes/:name', async (req, res) => {
+  const { name } = req.params;
+  if (!VOLUME_NAME_RE.test(name)) return res.status(400).json({ error: 'invalid volume name' });
+  try {
+    const active = ((await volumeUsers()).get(name) || []).filter(c => ACTIVE_CONTAINER_STATES.has(c.state));
+    if (active.length) {
+      return res.status(409).json({
+        error: `In use by running container${active.length > 1 ? 's' : ''} ${active.map(c => c.name).join(', ')} — stop the project first.`,
+      });
+    }
+    await execFileAsync('podman', ['volume', 'rm', '-f', name], { timeout: 60_000 });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`Volume delete failed (${name}):`, err.message);
+    res.status(500).json({ error: (err.stderr || err.message).trim() });
+  }
+});
+
+// SPA fallback. Must stay the last route registered: a GET route added after
+// it is never reached and gets index.html instead.
+app.get('*', (req, res) => {
+  res.sendFile(join(__dirname, '../public/index.html'));
 });
 
 const server = createServer(app);

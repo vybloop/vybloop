@@ -846,6 +846,16 @@ export function setProjectFolder(id, folderId) {
 
 // Ids of a project's workstreams — used by server.js to tear down their live
 // sessions/containers before the project itself is deleted.
+// Human-readable label for a project id ("quill", "quill / feat-auth"), or
+// null when no such project exists. Cheap: no git calls.
+export function getProjectLabel(id) {
+  const p = projects.find(p => p.id === id);
+  if (!p) return null;
+  if (!p.parentId) return p.name;
+  const parent = projects.find(q => q.id === p.parentId);
+  return `${parent?.name ?? p.parentId} / ${p.workstream}`;
+}
+
 export function getWorkstreamIds(parentId) {
   return childrenOf(parentId).map(p => p.id);
 }

@@ -81,6 +81,8 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `GET` | `/api/projects/:id/shared-images/:file` | Serve one shared image. |
 | `DELETE` | `/api/projects/:id/shared-images/:file` | Remove one shared image. |
 | `DELETE` | `/api/projects/:id/shared-images` | Remove all of a project's shared images. |
+| `GET` | `/api/volumes` | List podman volumes: `{ name, createdAt, project, projectLabel, containers, inUse }` (`project` from the compose label; `projectLabel` is `null` when that project was deleted). |
+| `DELETE` | `/api/volumes/:name` | Delete a volume (`podman volume rm -f`, which also removes stopped containers referencing it). 409 while a running container mounts it. |
 | `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current `claude-inner` image. |
 | `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. Returns `{ versions: { claude, codex } }` — the agent CLI versions in the new image. |
 
