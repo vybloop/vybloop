@@ -10,7 +10,9 @@ FROM ubuntu:24.04
 # nano is the interactive editor for git (commit messages, rebase todos) and
 # anything else honouring $EDITOR; the base image ships none, so git would
 # otherwise fail with "Terminal is dumb" / no editor available.
-RUN apt-get update && apt-get install -y curl ca-certificates git tzdata nano && \
+# zip lets /claudeconfig/loop-share.sh hand a shared directory over as a .zip
+# (it falls back to tar.gz without it).
+RUN apt-get update && apt-get install -y curl ca-certificates git tzdata nano zip && \
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*

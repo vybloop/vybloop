@@ -204,11 +204,11 @@ export function noteAgentOutput(projectId) {
     setTimeout(() => setAgentBusy(projectId, false), AGENT_QUIET_MS));
 }
 
-export function broadcastSharedImage(projectId, entry) {
+export function broadcastSharedFile(projectId, entry) {
   const watcher = watchers.get(projectId);
   if (!watcher) return;
   for (const res of watcher.clients) {
-    sendEvent(res, 'shared-image', entry);
+    sendEvent(res, 'shared-file', entry);
   }
 }
 

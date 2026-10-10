@@ -117,7 +117,7 @@ class LoopProjectScreen extends LitElement {
     _wsMenuOpen: { state: true },
     _creatingWorkstream: { state: true },
     _deletingWorkstream: { state: true },
-    _sharedImages: { state: true },
+    _sharedFiles: { state: true },
     _sharedPanelOpen: { state: true },
     _lightbox: { state: true },
     _sidebarWidth: { state: true },
@@ -898,7 +898,7 @@ class LoopProjectScreen extends LitElement {
       opacity: 0.5;
     }
 
-    /* Shared images panel — screenshots the inner agent pushed to the UI */
+    /* Shared files panel — screenshots and artifacts the inner agent pushed to the UI */
     .shared-toggle {
       display: inline-flex;
       align-items: center;
@@ -998,6 +998,33 @@ class LoopProjectScreen extends LitElement {
       background: var(--bg-2);
       cursor: zoom-in;
     }
+    .shared-file {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 10px;
+      color: var(--fg-2);
+      text-decoration: none;
+      background: var(--bg-2);
+      transition: color 0.12s;
+    }
+    .shared-file:hover { color: var(--fg-0); }
+    .shared-file svg { flex-shrink: 0; }
+    .shared-file-name {
+      flex: 1;
+      min-width: 0;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--fg-1);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .shared-file-size {
+      font-size: 11px;
+      color: var(--fg-3);
+      flex-shrink: 0;
+    }
     .shared-meta {
       display: flex;
       align-items: center;
@@ -1031,6 +1058,7 @@ class LoopProjectScreen extends LitElement {
       transition: color 0.12s;
     }
     .shared-del:hover { color: var(--del); }
+    a.shared-del:hover { color: var(--accent); }
     .shared-caption {
       padding: 0 8px 8px;
       font-size: 12px;
@@ -1930,7 +1958,7 @@ class LoopProjectScreen extends LitElement {
     this._wsMenuOpen = false;
     this._creatingWorkstream = false;
     this._deletingWorkstream = false;
-    this._sharedImages = [];   // [{ file, name, caption, createdAt }] — newest first
+    this._sharedFiles = [];    // [{ file, name, kind, caption, size, createdAt }] — newest first
     this._sharedPanelOpen = false;
     this._lightbox = null;     // null | shared image entry shown full-screen
     this._sidebarWidth = this._loadSidebarWidth();
@@ -2013,7 +2041,7 @@ class LoopProjectScreen extends LitElement {
         this._loadChanges();
         this._loadFileTree();
         this._loadWorkstreams();
-        this._loadSharedImages();
+        this._loadSharedFiles();
         this._connectSse();
       }
       // If project arrived after firstUpdated (e.g. page refresh), #xterm-container
@@ -2133,7 +2161,7 @@ class LoopProjectScreen extends LitElement {
     this._committed = false;
     this._claudeLink = null;
     this._dismissOsc52();
-    this._sharedImages = [];
+    this._sharedFiles = [];
     this._sharedPanelOpen = false;
     this._lightbox = null;
     this._selectedFiles = new Set();
@@ -3322,10 +3350,10 @@ class LoopProjectScreen extends LitElement {
     });
     this._sse.addEventListener('ports', (e) => { this._ports = JSON.parse(e.data); });
     this._sse.addEventListener('stale', (e) => { this._stale = JSON.parse(e.data).stale; });
-    this._sse.addEventListener('shared-image', (e) => {
+    this._sse.addEventListener('shared-file', (e) => {
       const entry = JSON.parse(e.data);
-      this._sharedImages = [entry, ...this._sharedImages.filter(i => i.file !== entry.file)];
-      // A freshly shared image is something the agent wants seen, so pop the
+      this._sharedFiles = [entry, ...this._sharedFiles.filter(i => i.file !== entry.file)];
+      // A freshly shared file is something the agent wants seen, so pop the
       // panel open; the user can dismiss it and it stays shut until the next one.
       this._sharedPanelOpen = true;
     });
@@ -3344,7 +3372,7 @@ class LoopProjectScreen extends LitElement {
   // The app shell keeps the project row (sidebar status, Run button) in sync
   // from this event rather than opening a second EventSource on the same
   // /events endpoint: every extra stream permanently eats one of the browser's
-  // six per-origin HTTP connections, and shared-image loads starve behind them.
+  // six per-origin HTTP connections, and shared-file loads starve behind them.
   _emitRuntime(detail) {
     if (!this.project) return;
     this.dispatchEvent(new CustomEvent('project-runtime', {
@@ -3354,35 +3382,46 @@ class LoopProjectScreen extends LitElement {
     }));
   }
 
-  async _loadSharedImages() {
+  async _loadSharedFiles() {
     try {
-      const res = await fetch(`/api/projects/${this.project.id}/shared-images`);
+      const res = await fetch(`/api/projects/${this.project.id}/shared-files`);
       if (!res.ok) return;
-      this._sharedImages = await res.json();
+      this._sharedFiles = await res.json();
     } catch {
       // panel just stays empty
     }
   }
 
-  _sharedImageUrl(entry) {
-    return `/api/projects/${this.project.id}/shared-images/${encodeURIComponent(entry.file)}`;
+  _sharedFileUrl(entry, { download = false } = {}) {
+    const url = `/api/projects/${this.project.id}/shared-files/${encodeURIComponent(entry.file)}`;
+    return download ? `${url}?download=1` : url;
   }
 
-  async _deleteSharedImage(entry) {
-    this._sharedImages = this._sharedImages.filter(i => i.file !== entry.file);
+  async _deleteSharedFile(entry) {
+    this._sharedFiles = this._sharedFiles.filter(i => i.file !== entry.file);
     if (this._lightbox?.file === entry.file) this._lightbox = null;
     try {
-      await fetch(this._sharedImageUrl(entry), { method: 'DELETE' });
+      await fetch(this._sharedFileUrl(entry), { method: 'DELETE' });
     } catch { /* already gone from the UI */ }
   }
 
-  async _clearSharedImages() {
-    this._sharedImages = [];
+  async _clearSharedFiles() {
+    this._sharedFiles = [];
     this._lightbox = null;
     this._sharedPanelOpen = false;
     try {
-      await fetch(`/api/projects/${this.project.id}/shared-images`, { method: 'DELETE' });
+      await fetch(`/api/projects/${this.project.id}/shared-files`, { method: 'DELETE' });
     } catch { /* already gone from the UI */ }
+  }
+
+  _formatSize(bytes) {
+    if (!Number.isFinite(bytes)) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ['KB', 'MB', 'GB'];
+    let n = bytes / 1024;
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
   }
 
   _renderSharedPanel() {
@@ -3390,9 +3429,9 @@ class LoopProjectScreen extends LitElement {
     return html`
       <div class="shared-panel">
         <div class="shared-panel-head">
-          <span class="shared-panel-title">Shared images</span>
-          ${this._sharedImages.length ? html`
-            <button class="shared-panel-action" @click=${this._clearSharedImages} title="Remove all shared images">Clear</button>
+          <span class="shared-panel-title">Shared files</span>
+          ${this._sharedFiles.length ? html`
+            <button class="shared-panel-action" @click=${this._clearSharedFiles} title="Remove all shared files">Clear</button>
           ` : ''}
           <button class="shared-panel-close" @click=${() => this._sharedPanelOpen = false} title="Dismiss panel">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -3401,24 +3440,39 @@ class LoopProjectScreen extends LitElement {
           </button>
         </div>
         <div class="shared-panel-body">
-          ${this._sharedImages.length === 0 ? html`
+          ${this._sharedFiles.length === 0 ? html`
             <div class="shared-empty">
-              Nothing shared yet. The agent can post a screenshot here with
-              <code>sh /claudeconfig/loop-share-image.sh &lt;file&gt;</code>.
+              Nothing shared yet. The agent can post a screenshot or a build artifact here with
+              <code>sh /claudeconfig/loop-share.sh &lt;file-or-dir&gt;</code>.
             </div>
-          ` : this._sharedImages.map(entry => html`
+          ` : this._sharedFiles.map(entry => html`
             <div class="shared-card">
-              <img
-                class="shared-thumb"
-                src=${this._sharedImageUrl(entry)}
-                alt=${entry.name}
-                loading="lazy"
-                @click=${() => this._lightbox = entry}
-              >
+              ${entry.kind === 'image' ? html`
+                <img
+                  class="shared-thumb"
+                  src=${this._sharedFileUrl(entry)}
+                  alt=${entry.name}
+                  loading="lazy"
+                  @click=${() => this._lightbox = entry}
+                >
+              ` : html`
+                <a class="shared-file" href=${this._sharedFileUrl(entry, { download: true })} download=${entry.name} title="Download ${entry.name}">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>
+                  </svg>
+                  <span class="shared-file-name">${entry.name}</span>
+                  <span class="shared-file-size">${this._formatSize(entry.size)}</span>
+                </a>
+              `}
               <div class="shared-meta">
-                <span class="shared-name" title=${entry.name}>${entry.name}</span>
+                <span class="shared-name" title=${entry.name}>${entry.kind === 'image' ? entry.name : ''}</span>
                 <span class="shared-time">${this._formatSharedTime(entry.createdAt)}</span>
-                <button class="shared-del" @click=${() => this._deleteSharedImage(entry)} title="Remove">
+                <a class="shared-del" href=${this._sharedFileUrl(entry, { download: true })} download=${entry.name} title="Download">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>
+                  </svg>
+                </a>
+                <button class="shared-del" @click=${() => this._deleteSharedFile(entry)} title="Remove">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 6 6 18M6 6l12 12"/>
                   </svg>
@@ -3447,7 +3501,7 @@ class LoopProjectScreen extends LitElement {
     const entry = this._lightbox;
     return html`
       <div class="lightbox" @click=${() => this._lightbox = null}>
-        <img src=${this._sharedImageUrl(entry)} alt=${entry.name} @click=${e => e.stopPropagation()}>
+        <img src=${this._sharedFileUrl(entry)} alt=${entry.name} @click=${e => e.stopPropagation()}>
         ${entry.caption ? html`<div class="lightbox-caption">${entry.caption}</div>` : ''}
       </div>
     `;
@@ -5140,12 +5194,12 @@ class LoopProjectScreen extends LitElement {
                 `;
               })}
             </div>
-            ${this._sharedImages.length && !this._sharedPanelOpen ? html`
-              <button class="shared-toggle" @click=${() => this._sharedPanelOpen = true} title="Show shared images">
+            ${this._sharedFiles.length && !this._sharedPanelOpen ? html`
+              <button class="shared-toggle" @click=${() => this._sharedPanelOpen = true} title="Show shared files">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+                  <path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>
                 </svg>
-                <span class="count-badge">${this._sharedImages.length}</span>
+                <span class="count-badge">${this._sharedFiles.length}</span>
               </button>
             ` : ''}
             <div class="${this._running ? 'connection-chip' : 'connection-chip idle-chip'}">

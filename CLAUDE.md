@@ -77,10 +77,10 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `GET` | `/api/templates` | List available project templates. |
 | `GET` | `/api/config` | Get config (e.g. `terminalMode`). |
 | `PATCH` | `/api/config` | Update config. |
-| `GET` | `/api/projects/:id/shared-images` | Images the agent shared with the UI, newest first. |
-| `GET` | `/api/projects/:id/shared-images/:file` | Serve one shared image. |
-| `DELETE` | `/api/projects/:id/shared-images/:file` | Remove one shared image. |
-| `DELETE` | `/api/projects/:id/shared-images` | Remove all of a project's shared images. |
+| `GET` | `/api/projects/:id/shared-files` | Files the agent shared with the UI, newest first (`{ file, name, kind: "image"\|"file", caption, size, createdAt }`). |
+| `GET` | `/api/projects/:id/shared-files/:file` | Serve one shared file. Images inline (attachment with `?download=1`); everything else always as an attachment named after the original file. |
+| `DELETE` | `/api/projects/:id/shared-files/:file` | Remove one shared file. |
+| `DELETE` | `/api/projects/:id/shared-files` | Remove all of a project's shared files. |
 | `GET` | `/api/volumes` | List podman volumes: `{ name, createdAt, project, projectLabel, containers, inUse }` (`project` from the compose label; `projectLabel` is `null` when that project was deleted). |
 | `DELETE` | `/api/volumes/:name` | Delete a volume (`podman volume rm -f`, which also removes stopped containers referencing it). 409 while a running container mounts it. |
 | `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current `claude-inner` image. |
@@ -171,7 +171,7 @@ Shell sessions are left alone either way; they run bash on both.
 | sandbox instructions | `--append-system-prompt` | `$CODEX_HOME/AGENTS.md` (Codex has no such flag) |
 | turn-done notification | `hooks.Stop` in `settings.json` | `notify = [...]` in `$CODEX_HOME/config.toml` |
 
-`AGENT_INSTRUCTIONS` is the single source for the sandbox rules (no nested containers, `${HOST_PORT}`, the share-image script); `installCodexConfig()` writes the Codex-side files at backend startup — like the share tool, so editing them needs only a backend restart, not a sandbox rebuild. Both notification paths run the same `/claudeconfig/loop-notify-done.sh`, so `agent-done` reaches the UI identically. Codex does not read `CLAUDE.md`, which is what the project templates write, so its `AGENTS.md` tells it to fall back to `CLAUDE.md`. `config.toml` is rewritten by replacing just the `notify` line, keeping any hand-added settings — and keeping the key ahead of any `[table]` header, since a bare TOML key after one belongs to that table.
+`AGENT_INSTRUCTIONS` is the single source for the sandbox rules (no nested containers, `${HOST_PORT}`, the share script); `installCodexConfig()` writes the Codex-side files at backend startup — like the share tool, so editing them needs only a backend restart, not a sandbox rebuild. Both notification paths run the same `/claudeconfig/loop-notify-done.sh`, so `agent-done` reaches the UI identically. Codex does not read `CLAUDE.md`, which is what the project templates write, so its `AGENTS.md` tells it to fall back to `CLAUDE.md`. `config.toml` is rewritten by replacing just the `notify` line, keeping any hand-added settings — and keeping the key ahead of any `[table]` header, since a bare TOML key after one belongs to that table.
 
 The `shell` session type runs `bash` in the same container. It also mounts `/claudeconfig` and sets `GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig` so the git credential helper works there (see GitHub auth below).
 
@@ -191,18 +191,20 @@ A Unix domain socket at `/claudeconfig/loop-events.sock` lets inner containers n
 
 **SSE propagation**: `broadcastAgentDone(projectId)` in `file-watcher.js` sends an `agent-done` SSE event to all connected frontend clients for that project. The frontend listens in `_connectSse()` in `loop-project-screen.js`.
 
-### Shared images — `backend/src/shared-images.js`
+### Shared files — `backend/src/shared-files.js`
 
-The inner agent can push an image (a screenshot, a rendered chart) into the web UI. It has no route to the backend's HTTP API, so this rides the same `/claudeconfig` mount as the IPC socket:
+The inner agent can push a file into the web UI — a screenshot to preview, or a deliverable to download (a built app, a binary, a PDF). It has no route to the backend's HTTP API, so this rides the same `/claudeconfig` mount as the IPC socket:
 
-1. `installShareTool()` (called from `server.js` at startup, next to the Stop hook) writes `/claudeconfig/loop-share-image.sh`. The agent's `--append-system-prompt` tells it to run `sh /claudeconfig/loop-share-image.sh <image-file> [caption]`.
-2. The script copies the file to `/claudeconfig/shared-images/<projectId>/<timestamp>.<ext>` (rejecting non-image extensions) and sends `{ event: "image-shared", projectId, file, name, caption }` over `loop-events.sock`.
-3. `server.js` calls `recordSharedImage()`, which stamps size/`createdAt` into `/claudeconfig/shared-images/<projectId>/index.json` (newest first, capped at 50 — older images are deleted), then `broadcastSharedImage()` pushes a `shared-image` SSE event.
-4. `loop-project-screen.js` appends the entry to `_sharedImages` and opens the right-hand **Shared images** panel. The panel is dismissable (its `×`); once dismissed a badge next to the connection chip reopens it, and the next shared image pops it open again. Clicking a thumbnail opens a lightbox.
+1. `installShareTool()` (called from `server.js` at startup, next to the Stop hook) writes `/claudeconfig/loop-share.sh`. The agent's instructions (`AGENT_INSTRUCTIONS` in `agent-cli.js`) tell it to run `sh /claudeconfig/loop-share.sh <file-or-directory> [caption]`. `loop-share-image.sh`, the old image-only name, is kept as an alias so agents started with the old prompt keep working.
+2. The script copies the file to `/claudeconfig/shared-files/<projectId>/<timestamp>[.<ext>]` (ext sanitized to alphanumerics; the original name travels in the message). A **directory** is archived first — `zip -qry` (installed in `inner-container/Dockerfile`), falling back to `tar.gz` in a sandbox image built before that — so an agent can hand over e.g. a whole `dist/`. It then sends `{ event: "file-shared", projectId, file, name, caption }` over `loop-events.sock` (`image-shared` is still accepted).
+3. `server.js` calls `recordSharedFile()`, which stamps `kind` (`image` by extension, else `file`), size and `createdAt` into `/claudeconfig/shared-files/<projectId>/index.json` (newest first, capped at 50 entries and 2 GiB — the oldest are deleted, the newest is always kept), then `broadcastSharedFile()` pushes a `shared-file` SSE event.
+4. `loop-project-screen.js` prepends the entry to `_sharedFiles` and opens the right-hand **Shared files** panel. Images render as thumbnails (click → lightbox); other files as a download card with name and size. Every card has a download button. The panel is dismissable (its `×`); once dismissed a badge next to the connection chip reopens it, and the next shared file pops it open again.
 
-The script is written to `/claudeconfig` rather than baked into `inner-container/Dockerfile` so changes to it need only a backend restart, not a sandbox rebuild. Changing the *system prompt* wording still needs the agent session to respawn (**Restart sandbox**), since it is a `podman run` argument.
+Non-image files are only ever served as `Content-Disposition: attachment` with `application/octet-stream`, plus `Content-Security-Policy: sandbox` and `nosniff` on everything, so a shared `.html` (or `.svg`) can never execute on Loop's origin.
 
-Because the store is keyed by the opaque project id, workstreams get their own image list for free. `teardownProject()` calls `clearSharedImages(id)` so deleting a project or workstream drops its images.
+The script is written to `/claudeconfig` rather than baked into `inner-container/Dockerfile` so changes to it need only a backend restart, not a sandbox rebuild. Changing the *system prompt* wording still needs the agent session to respawn (**Restart sandbox**), since it is a `podman run` argument. The store used to live at `/claudeconfig/shared-images`; `installShareTool()` renames it on first start.
+
+Because the store is keyed by the opaque project id, workstreams get their own file list for free. `teardownProject()` calls `clearSharedFiles(id)` so deleting a project or workstream drops its files.
 
 ### GitHub authentication — `backend/src/git-auth.js` + `backend/src/git-credential-broker.js`
 

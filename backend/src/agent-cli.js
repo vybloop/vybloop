@@ -18,7 +18,7 @@ export const AGENT_INSTRUCTIONS = [
   'You cannot run Docker or Podman containers directly inside this sandbox.',
   'If the project has a docker-compose.yml at the repo root, instruct the user to start or restart the app using the "Run" or "Restart" button in the Loop UI — do not attempt to run compose yourself.',
   'Compose files must never hard-code a host port: the host port is assigned automatically and passed in as the HOST_PORT environment variable, so publish ports as "${HOST_PORT}:<container port>".',
-  'To show the user an image or screenshot, run `sh /claudeconfig/loop-share-image.sh <image-file> [caption]` — it appears in a side panel in the Loop UI. Use it whenever a picture explains the result better than text.',
+  'To share a file with the user, run `sh /claudeconfig/loop-share.sh <file-or-directory> [caption]` — it appears in a side panel in the Loop UI, where images are previewed and anything else can be downloaded. Use it whenever a picture (e.g. a screenshot) explains the result better than text, and to hand over deliverables such as a built app, installer, binary, PDF or data export. Sharing a directory archives it first (zip), so share the build output directory (e.g. dist/), not the whole repo or node_modules.',
 ];
 
 // nano is installed in claude-inner and set as git's core.editor; exporting it

@@ -58,12 +58,12 @@ import {
   AGENT_CLIS,
 } from './data.js';
 import { listTemplates } from './templates.js';
-import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, broadcastSharedImage, setAgentBusy, isAgentBusy, noteAgentOutput, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
+import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, broadcastSharedFile, setAgentBusy, isAgentBusy, noteAgentOutput, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
 import {
-  installShareTool, recordSharedImage, listSharedImages, getSharedImagePath,
-  deleteSharedImage, clearSharedImages, sharedImageMime,
-} from './shared-images.js';
+  installShareTool, recordSharedFile, listSharedFiles, getSharedFile,
+  deleteSharedFile, clearSharedFiles, sharedImageMime,
+} from './shared-files.js';
 import { startCredentialBroker } from './git-credential-broker.js';
 import { getGithubStatus, createRepo, listRepoTargets } from './git-auth.js';
 import { startBuildCapture, startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
@@ -335,7 +335,7 @@ async function teardownProject(id, isRunning) {
   stopLogCapture(id);
   destroyWatcher(id);
   notifyProjectStopped(id);
-  clearSharedImages(id);
+  clearSharedFiles(id);
   await cancelComposeUp(id, getOrCreateBuffer(id));
   if (isRunning) {
     await composeDown(id, `/data/${id}/git`).catch(() => {});
@@ -677,36 +677,42 @@ app.get('/api/projects/:id/image', async (req, res) => {
   res.send(result.data);
 });
 
-// Images an inner agent shared with the UI via /claudeconfig/loop-share-image.sh.
-app.get('/api/projects/:id/shared-images', async (req, res) => {
+// Files an inner agent shared with the UI via /claudeconfig/loop-share.sh.
+app.get('/api/projects/:id/shared-files', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
-  res.json(listSharedImages(req.params.id));
+  res.json(listSharedFiles(req.params.id));
 });
 
-app.get('/api/projects/:id/shared-images/:file', async (req, res) => {
+// Images are served inline for thumbnails unless `?download=1`; everything
+// else is always an attachment, so a shared .html can't run on our origin.
+app.get('/api/projects/:id/shared-files/:file', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
-  const full = getSharedImagePath(req.params.id, req.params.file);
-  if (!full) return res.status(404).json({ error: 'image not found' });
-  res.setHeader('Content-Type', sharedImageMime(req.params.file));
+  const shared = getSharedFile(req.params.id, req.params.file);
+  if (!shared) return res.status(404).json({ error: 'file not found' });
+  const imageMime = sharedImageMime(req.params.file);
+  if (!imageMime || req.query.download) res.attachment(shared.name);
+  res.setHeader('Content-Type', imageMime ?? 'application/octet-stream');
+  res.setHeader('Content-Security-Policy', 'sandbox');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
-  res.sendFile(full);
+  res.sendFile(shared.path);
 });
 
-app.delete('/api/projects/:id/shared-images/:file', async (req, res) => {
+app.delete('/api/projects/:id/shared-files/:file', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
-  if (!deleteSharedImage(req.params.id, req.params.file)) {
+  if (!deleteSharedFile(req.params.id, req.params.file)) {
     return res.status(400).json({ error: 'bad file name' });
   }
   res.json({ ok: true });
 });
 
-app.delete('/api/projects/:id/shared-images', async (req, res) => {
+app.delete('/api/projects/:id/shared-files', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
-  clearSharedImages(req.params.id);
+  clearSharedFiles(req.params.id);
   res.json({ ok: true });
 });
 
@@ -1222,16 +1228,17 @@ startIpcServer((msg) => {
   if (msg.event === 'agent-start' && msg.projectId) {
     setAgentBusy(msg.projectId, true);
   }
-  if (msg.event === 'image-shared' && msg.projectId) {
-    const entry = recordSharedImage(msg);
-    if (entry) broadcastSharedImage(msg.projectId, entry);
+  // 'image-shared' is the pre-files event name, from a share already in flight.
+  if ((msg.event === 'file-shared' || msg.event === 'image-shared') && msg.projectId) {
+    const entry = recordSharedFile(msg);
+    if (entry) broadcastSharedFile(msg.projectId, entry);
   }
 });
 
 try {
   installShareTool();
 } catch (err) {
-  console.error('[shared-images] failed to install share tool:', err.message);
+  console.error('[shared-files] failed to install share tool:', err.message);
 }
 
 try {
