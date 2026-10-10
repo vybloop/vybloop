@@ -3,21 +3,38 @@ import { readFileSync, writeFileSync, chmodSync, unlinkSync, existsSync } from '
 
 const SOCKET_PATH = '/claudeconfig/loop-events.sock';
 const HOOK_SCRIPT_PATH = '/claudeconfig/loop-notify-done.sh';
+const START_SCRIPT_PATH = '/claudeconfig/loop-notify-start.sh';
 const SETTINGS_PATH = '/claudeconfig/settings.json';
 
-function installHook() {
-  // Write the notify script
-  writeFileSync(HOOK_SCRIPT_PATH, `#!/bin/sh
+function notifyScript(event) {
+  return `#!/bin/sh
 node -e "
 const net = require('net');
 const projectId = process.env.LOOP_PROJECT_ID || '';
 const client = net.createConnection('/claudeconfig/loop-events.sock', function() {
-  client.write(JSON.stringify({event:'agent-done',projectId:projectId}) + '\\n');
+  client.write(JSON.stringify({event:'${event}',projectId:projectId}) + '\\n');
   client.end();
 });
 client.on('error', function() {});
 "
-`, { mode: 0o755 });
+`;
+}
+
+// Replace an existing loop hook (matched by script name) or append one.
+function mergeHook(settings, hookName, scriptPath, marker) {
+  const hookEntry = { hooks: [{ type: 'command', command: `bash ${scriptPath}` }] };
+  const entries = settings.hooks[hookName] ?? [];
+  const idx = entries.findIndex(h => h.hooks?.some(e => e.command?.includes(marker)));
+  if (idx >= 0) entries[idx] = hookEntry;
+  else entries.push(hookEntry);
+  settings.hooks[hookName] = entries;
+}
+
+function installHook() {
+  // Stop -> agent-done (the turn finished); UserPromptSubmit -> agent-start
+  // (the agent picked up a prompt and is working). Codex only has the former.
+  writeFileSync(HOOK_SCRIPT_PATH, notifyScript('agent-done'), { mode: 0o755 });
+  writeFileSync(START_SCRIPT_PATH, notifyScript('agent-start'), { mode: 0o755 });
 
   // Merge Stop hook into settings.json
   let settings = {};
@@ -25,17 +42,9 @@ client.on('error', function() {});
     try { settings = JSON.parse(readFileSync(SETTINGS_PATH, 'utf8')); } catch {}
   }
 
-  const hookEntry = { hooks: [{ type: 'command', command: `bash ${HOOK_SCRIPT_PATH}` }] };
-
   if (!settings.hooks) settings.hooks = {};
-  const stopHooks = settings.hooks.Stop ?? [];
-
-  // Replace existing loop hook or append
-  const idx = stopHooks.findIndex(h => h.hooks?.some(e => e.command?.includes('loop-notify-done')));
-  if (idx >= 0) stopHooks[idx] = hookEntry;
-  else stopHooks.push(hookEntry);
-
-  settings.hooks.Stop = stopHooks;
+  mergeHook(settings, 'Stop', HOOK_SCRIPT_PATH, 'loop-notify-done');
+  mergeHook(settings, 'UserPromptSubmit', START_SCRIPT_PATH, 'loop-notify-start');
   writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
 }
 

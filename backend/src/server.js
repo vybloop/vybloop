@@ -58,7 +58,7 @@ import {
   AGENT_CLIS,
 } from './data.js';
 import { listTemplates } from './templates.js';
-import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, broadcastSharedImage, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
+import { getOrCreateWatcher, broadcastStatus, broadcastPorts, broadcastAgentDone, broadcastSharedImage, setAgentBusy, isAgentBusy, noteAgentOutput, notifyProjectStarted, notifyProjectStopped, isProjectStale, destroyWatcher } from './file-watcher.js';
 import { startIpcServer } from './ipc-server.js';
 import {
   installShareTool, recordSharedImage, listSharedImages, getSharedImagePath,
@@ -901,6 +901,7 @@ app.get('/api/projects/:id/events', async (req, res) => {
   res.write(`event: remote-status\ndata: ${JSON.stringify(remote)}\n\n`);
   res.write(`event: files\ndata: ${JSON.stringify(tree ?? [])}\n\n`);
   if (isProjectStale(req.params.id)) res.write(`event: stale\ndata: ${JSON.stringify({ stale: true })}\n\n`);
+  res.write(`event: agent-busy\ndata: ${JSON.stringify({ busy: isAgentBusy(req.params.id) })}\n\n`);
 
   getOrCreateWatcher(req.params.id).addClient(res);
 });
@@ -952,7 +953,14 @@ async function getOrCreateSession(projectId, type, repoPath) {
     ? new DirectSession({ command, cwd })
     : new TerminalSession({ sessionKey: tmuxName(projectId, type), command, cwd });
 
-  session.onExit = () => sessions.delete(key);
+  // A destroyed session exits asynchronously, possibly after its replacement
+  // was created under the same key — leave the replacement alone.
+  session.onExit = () => {
+    if (sessions.get(key) !== session) return;
+    sessions.delete(key);
+    if (type === 'agent') setAgentBusy(projectId, false);
+  };
+  if (type === 'agent') session.onOutput = () => noteAgentOutput(projectId);
 
   try {
     await session.start();
@@ -971,7 +979,10 @@ async function getOrCreateSession(projectId, type, repoPath) {
 // Pass a session type ('agent' | 'shell' | 'logs') to tear down only those.
 async function destroyAllSessions(type) {
   const matches = [...sessions.entries()].filter(([key]) => !type || key.endsWith(`:${type}`));
-  for (const [key] of matches) sessions.delete(key);
+  for (const [key] of matches) {
+    sessions.delete(key);
+    if (key.endsWith(':agent')) setAgentBusy(key.slice(0, -':agent'.length), false);
+  }
   await Promise.all(matches.map(([, s]) => s.destroy().catch(() => {})));
 }
 
@@ -983,6 +994,7 @@ async function destroyProjectSessions(projectId, type) {
     key.startsWith(`${projectId}:`) && (!type || key.endsWith(`:${type}`)));
   for (const [key, session] of matches) {
     sessions.delete(key);
+    if (key.endsWith(':agent')) setAgentBusy(projectId, false);
     await session.destroy().catch(() => {});
   }
 }
@@ -1206,6 +1218,9 @@ async function restoreComposeStates() {
 startIpcServer((msg) => {
   if (msg.event === 'agent-done' && msg.projectId) {
     broadcastAgentDone(msg.projectId);
+  }
+  if (msg.event === 'agent-start' && msg.projectId) {
+    setAgentBusy(msg.projectId, true);
   }
   if (msg.event === 'image-shared' && msg.projectId) {
     const entry = recordSharedImage(msg);

@@ -187,6 +187,8 @@ A Unix domain socket at `/claudeconfig/loop-events.sock` lets inner containers n
 
 **Adding new events**: Send a new `event` value from the hook (or any process with access to `/claudeconfig/`), handle it in the `startIpcServer` callback in `server.js`, and broadcast via the SSE helpers in `file-watcher.js`.
 
+**Agent busy (title spinner)**: A second hook, `UserPromptSubmit` → `/claudeconfig/loop-notify-start.sh`, sends `agent-start`; `setAgentBusy()` in `file-watcher.js` tracks the busy flag and pushes an `agent-busy` SSE event (`{ busy }`, also sent in the `/events` snapshot), and the project screen shows a braille spinner in the tab title while it is set. `agent-done`, the agent session ending, and a sandbox restart clear it. Interrupting with Esc fires no hook, so agent PTY output is the backstop: 15s of silence while busy clears the flag (a working Claude Code redraws its spinner constantly). Codex has no prompt-submit hook, so it never shows the spinner.
+
 **SSE propagation**: `broadcastAgentDone(projectId)` in `file-watcher.js` sends an `agent-done` SSE event to all connected frontend clients for that project. The frontend listens in `_connectSse()` in `loop-project-screen.js`.
 
 ### Shared images — `backend/src/shared-images.js`

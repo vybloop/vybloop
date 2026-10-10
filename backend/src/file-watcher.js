@@ -157,11 +157,51 @@ export function broadcastPorts(projectId, ports) {
 }
 
 export function broadcastAgentDone(projectId) {
+  setAgentBusy(projectId, false);
   const watcher = watchers.get(projectId);
   if (!watcher) return;
   for (const res of watcher.clients) {
     sendEvent(res, 'agent-done', {});
   }
+}
+
+// Whether each project's agent is mid-turn. Set by the UserPromptSubmit hook
+// (agent-start), cleared by the Stop hook (agent-done). Interrupting with Esc
+// fires neither, so the agent terminal's output stream is the backstop: a
+// working agent redraws its spinner/timer constantly, so a quiet PTY means the
+// turn is over.
+const AGENT_QUIET_MS = 15000;
+const agentBusyTimers = new Map(); // projectId -> quiet-timeout handle
+
+export function isAgentBusy(projectId) {
+  return agentBusyTimers.has(projectId);
+}
+
+export function setAgentBusy(projectId, busy) {
+  if (busy === isAgentBusy(projectId)) {
+    if (busy) noteAgentOutput(projectId);
+    return;
+  }
+  if (busy) {
+    agentBusyTimers.set(projectId, null);
+    noteAgentOutput(projectId);
+  } else {
+    clearTimeout(agentBusyTimers.get(projectId));
+    agentBusyTimers.delete(projectId);
+  }
+  const watcher = watchers.get(projectId);
+  if (!watcher) return;
+  for (const res of watcher.clients) {
+    sendEvent(res, 'agent-busy', { busy });
+  }
+}
+
+// Called on agent PTY output; pushes back the quiet timeout while busy.
+export function noteAgentOutput(projectId) {
+  if (!agentBusyTimers.has(projectId)) return;
+  clearTimeout(agentBusyTimers.get(projectId));
+  agentBusyTimers.set(projectId,
+    setTimeout(() => setAgentBusy(projectId, false), AGENT_QUIET_MS));
 }
 
 export function broadcastSharedImage(projectId, entry) {

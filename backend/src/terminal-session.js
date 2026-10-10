@@ -26,6 +26,7 @@ export class TerminalSession {
     this.clients = new Map();       // ws -> { pty, clientSessionName }
     this.alive = false;
     this.onExit = null;             // called when the underlying session exits
+    this.onOutput = null;           // called on every chunk of PTY output
     this._monitorTimer = null;
   }
 
@@ -68,6 +69,7 @@ export class TerminalSession {
     this.clients.set(ws, { pty: ptyProc, clientSessionName });
 
     ptyProc.onData(data => {
+      this.onOutput?.();
       if (ws.readyState === 1) ws.send(Buffer.from(data));
     });
 
@@ -153,6 +155,7 @@ export class DirectSession {
     this.cwd = cwd || process.env.HOME || '/';
     this.alive = false;
     this.onExit = null;
+    this.onOutput = null;
     this._pty = null;
     this._clients = new Set();
   }
@@ -172,6 +175,7 @@ export class DirectSession {
     this.alive = true;
 
     this._pty.onData(data => {
+      this.onOutput?.();
       const buf = Buffer.from(data);
       for (const ws of this._clients) {
         if (ws.readyState === 1) ws.send(buf);

@@ -48,6 +48,10 @@ function detectLanguage(filename) {
   return LANG_MAP[ext] ?? 'plaintext';
 }
 
+// Tab-title spinner while the agent is working.
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPINNER_INTERVAL_MS = 250;
+
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']);
@@ -1920,6 +1924,9 @@ class LoopProjectScreen extends LitElement {
     this._panelMenu = null;   // null | { x, y } — the changes panel "..." menu
     this._workstreams = [];   // [{ id, workstream, branch, status }] — default first
     this._agentDoneUnseen = false; // agent finished while the tab was hidden
+    this._agentBusy = false;       // agent is mid-turn (spinner in the title)
+    this._spinnerFrame = 0;
+    this._spinnerTimer = null;
     this._wsMenuOpen = false;
     this._creatingWorkstream = false;
     this._deletingWorkstream = false;
@@ -2013,7 +2020,10 @@ class LoopProjectScreen extends LitElement {
       // wasn't in the DOM yet when firstUpdated ran, so initialize now.
       if (!this._term) this._initTerminal();
       else if (!this._termWs || switched) this._connectWs();
-      if (switched) this._agentDoneUnseen = false;
+      if (switched) {
+        this._agentDoneUnseen = false;
+        this._setAgentBusy(false); // the new project's SSE snapshot re-sends it
+      }
       this._updateTitle();
     }
     if (changed.has('project') && this.project?.status === 'running') {
@@ -2160,6 +2170,7 @@ class LoopProjectScreen extends LitElement {
     this._mq?.removeEventListener('change', this._mqHandler);
     if (this._visibilityHandler) document.removeEventListener('visibilitychange', this._visibilityHandler);
     this._agentDoneUnseen = false;
+    this._setAgentBusy(false);
     document.title = 'Loop';
     if (this._searchKeyHandler) window.removeEventListener('keydown', this._searchKeyHandler);
     this._sse?.close();
@@ -2841,14 +2852,31 @@ class LoopProjectScreen extends LitElement {
   // --- Workstreams ---------------------------------------------------------
 
   // Tab title: "<project>" or "<project> - <workstream>", prefixed with
-  // "Done!" while an agent-done notification hasn't been seen yet. Tracked as a
-  // flag because `project` is re-set on every runtime update, which would
-  // otherwise clobber the notification while the tab is in the background.
+  // "Done!" while an agent-done notification hasn't been seen yet, or with a
+  // braille spinner while the agent is working. Tracked as flags because
+  // `project` is re-set on every runtime update, which would otherwise clobber
+  // the prefix while the tab is in the background.
   _updateTitle() {
     if (!this.project) return;
     const { name, workstream } = this.project;
     const base = workstream ? `${name} - ${workstream}` : name;
-    document.title = this._agentDoneUnseen ? `Done! — ${base}` : base;
+    if (this._agentDoneUnseen) document.title = `Done! — ${base}`;
+    else if (this._agentBusy) document.title = `${SPINNER_FRAMES[this._spinnerFrame]} ${base}`;
+    else document.title = base;
+  }
+
+  _setAgentBusy(busy) {
+    this._agentBusy = busy;
+    if (busy && !this._spinnerTimer) {
+      this._spinnerTimer = setInterval(() => {
+        this._spinnerFrame = (this._spinnerFrame + 1) % SPINNER_FRAMES.length;
+        this._updateTitle();
+      }, SPINNER_INTERVAL_MS);
+    } else if (!busy && this._spinnerTimer) {
+      clearInterval(this._spinnerTimer);
+      this._spinnerTimer = null;
+    }
+    this._updateTitle();
   }
 
   // The id of the project this workstream belongs to (itself, if it is the
@@ -3301,7 +3329,11 @@ class LoopProjectScreen extends LitElement {
       // panel open; the user can dismiss it and it stays shut until the next one.
       this._sharedPanelOpen = true;
     });
+    this._sse.addEventListener('agent-busy', (e) => {
+      this._setAgentBusy(JSON.parse(e.data).busy);
+    });
     this._sse.addEventListener('agent-done', () => {
+      this._setAgentBusy(false);
       if (document.visibilityState !== 'visible') {
         this._agentDoneUnseen = true;
         this._updateTitle();
