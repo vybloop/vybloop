@@ -1,10 +1,8 @@
 FROM ubuntu:24.04
 
-# Node 22+ is required: @anthropic-ai/claude-code declares `engines.node >=22`
-# from 2.1.198 onward. npm silently resolves the newest version whose engines
-# the running Node satisfies, so on Node 20 `npm install -g` kept installing
-# 2.1.197 forever and the sandbox never picked up new Claude Code releases —
-# no amount of --no-cache rebuilding could fix that.
+# Node here is for projects and Loop's helper scripts (the Stop hook, the git
+# credential helper), not for the agent CLIs: those bring their own Node on the
+# loop-agents volume (see below), so a project changing this one can't break them.
 # tzdata is needed for the TZ env var (set from Loop's timezone setting) to
 # resolve to a real zone instead of silently falling back to UTC.
 # nano is the interactive editor for git (commit messages, rebase todos) and
@@ -17,16 +15,12 @@ RUN apt-get update && apt-get install -y curl ca-certificates git tzdata nano zi
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# @latest is explicit so a stale local metadata cache can't pin an old version,
-# and the version is echoed into the build log to make regressions like the one
-# above visible at build time.
-RUN npm install -g @anthropic-ai/claude-code@latest && claude --version
-
-# Codex CLI — the alternative agent, selectable from the Loop menu. Its npm
-# package is a thin launcher that execs a prebuilt musl binary from an optional
-# platform dependency, so `codex --version` here also proves that binary got
-# installed rather than failing later inside a user's session.
-RUN npm install -g @openai/codex@latest && codex --version
+# Claude Code and Codex are not installed in the image. They live on the
+# `loop-agents` volume, mounted read-only at /opt/loop by every sandbox and
+# populated by install-agents.sh (backend/src/agent-toolchain.js), so updating
+# them never invalidates this image's layers or anything built on top of it.
+RUN ln -s /opt/loop/bin/claude /usr/local/bin/claude && \
+    ln -s /opt/loop/bin/codex /usr/local/bin/codex
 
 WORKDIR /project
 CMD ["claude"]

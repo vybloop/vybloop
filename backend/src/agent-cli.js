@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { getTimezone, getAgentCli } from './data.js';
+import { AGENTS_MOUNT } from './agent-toolchain.js';
 
 // CODEX_HOME lives under /claudeconfig — the same mount Claude Code's config
 // uses — so a `codex login` inside one throwaway agent container survives into
@@ -42,8 +43,12 @@ const AGENT_COMMANDS = {
     'podman', 'run', '--rm', '-it',
     '-v', `${repoPath}:/project`,
     '-v', '/claudeconfig:/claudeconfig',
+    ...AGENTS_MOUNT,
     '--env', 'CLAUDE_CONFIG_DIR=/claudeconfig',
     '--env', 'ANTHROPIC_API_KEY',
+    // The CLI lives on a read-only shared volume (agent-toolchain.js); updates
+    // go through Loop's "Update agent CLIs", not Claude Code's own updater.
+    '--env', 'DISABLE_AUTOUPDATER=1',
     ...commonEnv(projectId),
     '-w', '/project',
     'claude-inner',
@@ -57,6 +62,7 @@ const AGENT_COMMANDS = {
     'podman', 'run', '--rm', '-it',
     '-v', `${repoPath}:/project`,
     '-v', '/claudeconfig:/claudeconfig',
+    ...AGENTS_MOUNT,
     '--env', `CODEX_HOME=${CODEX_HOME}`,
     '--env', 'OPENAI_API_KEY',
     ...commonEnv(projectId),

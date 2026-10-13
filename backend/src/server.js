@@ -6,10 +6,10 @@ import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
-import { createHash } from 'crypto';
-import { readFileSync, existsSync } from 'fs';
+import { existsSync } from 'fs';
 import { TerminalSession, DirectSession } from './terminal-session.js';
 import { agentCommand, installCodexConfig, EDITOR_ENV } from './agent-cli.js';
+import { AGENTS_MOUNT, AGENTS_VOLUME, agentsReady, ensureAgents, updateAgents } from './agent-toolchain.js';
 import {
   getProjects,
   getProject,
@@ -933,6 +933,8 @@ const SESSION_COMMANDS = {
     'podman', 'run', '--rm', '-it',
     '-v', `${repoPath}:/project`,
     '-v', '/claudeconfig:/claudeconfig',
+    // So `claude` / `codex` also work from the shell tab.
+    ...AGENTS_MOUNT,
     '--env', 'GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig',
     '--env', `TZ=${getTimezone()}`,
     ...EDITOR_ENV,
@@ -943,6 +945,7 @@ const SESSION_COMMANDS = {
 };
 
 async function getOrCreateSession(projectId, type, repoPath) {
+  await agentsReady();
   const key = sessionKey(projectId, type);
   const existing = sessions.get(key);
   if (existing?.alive) return existing;
@@ -1005,43 +1008,6 @@ async function destroyProjectSessions(projectId, type) {
   }
 }
 
-const INNER_CONTAINER_DIR = join(__dirname, '../inner-container');
-
-// Rebuild the `claude-inner` sandbox image. Mirrors the build in start.sh,
-// stamping the Dockerfile hash label so start.sh won't redundantly rebuild.
-async function rebuildSandboxImage() {
-  const dockerfile = readFileSync(join(INNER_CONTAINER_DIR, 'Dockerfile'));
-  const hash = createHash('sha256').update(dockerfile).digest('hex');
-  // --no-cache forces every layer to rebuild, including the `npm install -g
-  // @anthropic-ai/claude-code` layer — otherwise podman reuses the cached layer
-  // and the sandbox keeps an old Claude Code version even after a "rebuild".
-  await execFileAsync('podman', [
-    'build', '--no-cache', '-t', 'claude-inner',
-    '--label', `dockerfile-hash=${hash}`,
-    INNER_CONTAINER_DIR,
-  ], { timeout: 600_000 });
-  return await sandboxVersions();
-}
-
-// Agent CLI versions baked into the current `claude-inner` image, so the UI can
-// confirm a rebuild actually moved them forward. `claude --version` prints
-// "<version> (Claude Code)" and `codex --version` prints "codex-cli <version>",
-// so take the first token that looks like a version rather than a fixed field.
-async function sandboxVersions() {
-  const read = async (bin) => {
-    try {
-      const { stdout } = await execFileAsync('podman', [
-        'run', '--rm', 'claude-inner', bin, '--version',
-      ], { timeout: 60_000 });
-      return stdout.trim().split(/\s+/).find(t => /^\d+\./.test(t)) || null;
-    } catch {
-      return null;
-    }
-  };
-  const [claude, codex] = await Promise.all([read('claude'), read('codex')]);
-  return { claude, codex };
-}
-
 // Restart the sandbox: kill running sessions so they reconnect with the current
 // image. Does not rebuild — use /api/sandbox/rebuild for that.
 app.post('/api/sandbox/restart', async (req, res) => {
@@ -1054,21 +1020,20 @@ app.post('/api/sandbox/restart', async (req, res) => {
   }
 });
 
-// Rebuild the sandbox image, then restart sessions so the new image takes effect.
-app.post('/api/sandbox/rebuild', async (req, res) => {
+// Install the latest agent CLIs into the shared volume (agent-toolchain.js),
+// then restart sessions so they pick them up. The image isn't touched, so
+// nothing layered on it has to rebuild.
+app.post('/api/sandbox/update-agents', async (req, res) => {
   try {
-    // Build BEFORE tearing down sessions. The build takes minutes, and the
-    // frontend reconnects its terminal WebSockets the instant a session dies —
-    // destroying first meant every client respawned a container from the *old*
-    // image while the new one was still building, so a "rebuild" appeared to do
-    // nothing. Building first means the sessions killed below can only come
-    // back on the new image.
-    const versions = await rebuildSandboxImage();
+    // Install BEFORE tearing down sessions: the frontend reconnects a terminal
+    // the instant its session dies, and those reconnects must land on the new
+    // install rather than the one being replaced.
+    const versions = await updateAgents();
     await destroyAllSessions();
     res.json({ ok: true, versions });
   } catch (err) {
-    console.error('Sandbox rebuild failed:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('Agent CLI update failed:', (err.stderr || err.message).trim());
+    res.status(500).json({ error: (err.stderr || err.message).trim().split('\n').pop() });
   }
 });
 
@@ -1103,7 +1068,8 @@ async function volumeUsers() {
 
 async function listVolumes() {
   const { stdout } = await execFileAsync('podman', ['volume', 'ls', '--format', 'json'], { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 });
-  const volumes = JSON.parse(stdout.trim() || '[]');
+  // The agent CLI volume is Loop's own, not project data — keep it out of reach.
+  const volumes = JSON.parse(stdout.trim() || '[]').filter(v => v.Name !== AGENTS_VOLUME);
   const users = await volumeUsers();
   return volumes.map(v => {
     const project = v.Labels?.['io.podman.compose.project'] || v.Labels?.['com.docker.compose.project'] || null;
@@ -1135,6 +1101,7 @@ app.get('/api/volumes', async (req, res) => {
 app.delete('/api/volumes/:name', async (req, res) => {
   const { name } = req.params;
   if (!VOLUME_NAME_RE.test(name)) return res.status(400).json({ error: 'invalid volume name' });
+  if (name === AGENTS_VOLUME) return res.status(400).json({ error: 'the agent CLI volume cannot be deleted' });
   try {
     const active = ((await volumeUsers()).get(name) || []).filter(c => ACTIVE_CONTAINER_STATES.has(c.state));
     if (active.length) {
@@ -1248,6 +1215,10 @@ try {
 }
 
 startCredentialBroker();
+
+// First start (or the volume was removed): install the agent CLIs in the
+// background; sessions opened meanwhile wait for it in getOrCreateSession.
+ensureAgents();
 
 const PORT = process.env.PORT || 9876;
 server.listen(PORT, () => {

@@ -84,7 +84,7 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `GET` | `/api/volumes` | List podman volumes: `{ name, createdAt, project, projectLabel, containers, inUse }` (`project` from the compose label; `projectLabel` is `null` when that project was deleted). |
 | `DELETE` | `/api/volumes/:name` | Delete a volume (`podman volume rm -f`, which also removes stopped containers referencing it). 409 while a running container mounts it. |
 | `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current `claude-inner` image. |
-| `POST` | `/api/sandbox/rebuild` | Rebuild the `claude-inner` image (mirrors `start.sh`), then restart sessions. Returns `{ versions: { claude, codex } }` — the agent CLI versions in the new image. |
+| `POST` | `/api/sandbox/update-agents` | Install the latest agent CLIs into the `loop-agents` volume, then restart sessions. Returns `{ versions: { id, claude, codex, node } }`. |
 
 WebSocket endpoint: `ws://host/api/projects/:id/ws/:type` where `type` is `agent` or `shell`.
 
@@ -148,11 +148,19 @@ podman run --rm -it \
   claude-inner claude --dangerously-skip-permissions
 ```
 
-**Agent CLI versions in the sandbox**: `inner-container/Dockerfile` installs `@anthropic-ai/claude-code@latest` and `@openai/codex@latest` from npm. Keep its Node version at or above the package's `engines.node` — npm silently installs the newest release whose engines the running Node satisfies rather than failing, so a too-old Node pins the sandbox to an ancient Claude Code that no `--no-cache` rebuild can move (this is what stuck it at 2.1.197: releases from 2.1.198 on require Node ≥22). To update Claude Code, hit **Rebuild sandbox** in the UI (`POST /api/sandbox/rebuild`, `podman build --no-cache`) and check the version it reports back. The endpoint builds *first* and tears down sessions *after*: the frontend reconnects a terminal WebSocket the moment its session dies, so destroying first let clients respawn containers from the old image during the minutes the build was still running — a rebuild that looked like a no-op. For the same reason `DirectSession.destroy()` signals SIGTERM (then SIGKILL), not node-pty's default SIGHUP, which `podman run` ignores and which left orphan agent containers pinned to the old image. `start.sh` only rebuilds when the Dockerfile hash changes, so a restart alone will not pull a newer release.
+**Agent CLIs live on a volume, not in the image** — `backend/src/agent-toolchain.js` + `inner-container/install-agents.sh`. The `claude-inner` image is just Ubuntu + git/nano/zip/tzdata + Node (for projects and Loop's helper scripts) and symlinks `/usr/local/bin/{claude,codex}` → `/opt/loop/bin/`. Every agent and shell container mounts the podman volume `loop-agents` read-only at `/opt/loop` (`AGENTS_MOUNT`). Keeping the CLIs out of the image means updating them never invalidates image layers — the groundwork for per-project tool layers stacked on the base image.
+
+- `install-agents.sh` runs in a throwaway `claude-inner` container with the volume mounted read-write. It downloads Node (`NODE_MAJOR`, sha256-checked) into `versions/<id>/node`, `npm install -g --prefix versions/<id>/npm` both CLIs at `@latest`, writes wrappers in `versions/<id>/bin` that run each CLI on that bundled Node (or exec it directly when it ships a native binary — Claude Code does), runs `--version` on each, writes `versions.json`, then atomically swaps `current -> versions/<id>` and deletes all but the two newest installs. A failed install removes its directory and leaves `current` alone.
+- Bundled Node: npm's bin links use `#!/usr/bin/env node`, so a project installing a different Node in its sandbox could otherwise break the agent. Keep `NODE_MAJOR` at or above every CLI's `engines.node` — npm silently installs the newest release whose engines the running Node satisfies rather than failing (this once pinned the sandbox at Claude Code 2.1.197; 2.1.198+ needs Node ≥22).
+- `--allow-scripts=@anthropic-ai/claude-code` is load-bearing: Claude Code's postinstall replaces a placeholder `bin/claude.exe` with the platform's native binary, and newer npm skips unlisted install scripts.
+- Claude Code runs with `DISABLE_AUTOUPDATER=1`; the mount is read-only and shared by every sandbox.
+- **Update agent CLIs** in the top-bar menu (`POST /api/sandbox/update-agents`) installs *first* and tears down sessions *after*: the frontend reconnects a terminal WebSocket the moment its session dies, so tearing down first would respawn sessions on the old install. For the same reason `DirectSession.destroy()` signals SIGTERM (then SIGKILL), not node-pty's default SIGHUP, which `podman run` ignores and which left orphan agent containers running.
+- On startup `ensureAgents()` installs the CLIs in the background if the volume has none; `getOrCreateSession` awaits it (`agentsReady()`) so an early session doesn't find `/opt/loop` empty. The volume is hidden from, and can't be deleted via, the volumes UI.
+- `start.sh` still rebuilds `claude-inner` only when its Dockerfile hash changes.
 
 ### Agent CLI — `backend/src/agent-cli.js`
 
-The agent terminal runs either **Claude Code** or **Codex**, switched from the top-bar menu (next to Restart/Rebuild sandbox). Both are installed in the `claude-inner` image, so switching costs nothing but a session restart.
+The agent terminal runs either **Claude Code** or **Codex**, switched from the top-bar menu (next to Restart sandbox / Update agent CLIs). Both live on the `loop-agents` volume every sandbox mounts, so switching costs nothing but a session restart.
 
 **The choice is per project row**, which means per workstream — two workstreams of the same project can run different CLIs at once. `getAgentCli(id)` in `data.js` returns the row's own `agentCli` if it has one, else `config.agentCli`; a row only gets one when the user picks a CLI while that project is open. `agentCommand()` resolves it at session start, so the CLI is baked into that container's argv for its lifetime.
 

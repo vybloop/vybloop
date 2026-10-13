@@ -486,10 +486,10 @@ class LoopTopBar extends LitElement {
       this._menuOpen = false;
       const v = body.versions;
       if (v) {
-        alert(`Sandbox rebuilt — Claude Code ${v.claude ?? '?'}, Codex ${v.codex ?? '?'}`);
+        alert(`Agent CLIs updated — Claude Code ${v.claude ?? '?'}, Codex ${v.codex ?? '?'}`);
       }
     } catch (err) {
-      alert(`Sandbox ${action} failed: ${err.message}`);
+      alert(`${action === 'update-agents' ? 'Agent CLI update' : 'Sandbox restart'} failed: ${err.message}`);
     } finally {
       this._sandboxBusy = '';
     }
@@ -579,8 +579,8 @@ class LoopTopBar extends LitElement {
                 <button
                   class="menu-item"
                   ?disabled=${!!this._sandboxBusy}
-                  @click=${() => this._sandboxAction('rebuild')}
-                >${this._sandboxBusy === 'rebuild' ? 'Rebuilding sandbox…' : 'Rebuild sandbox'}</button>
+                  @click=${() => this._sandboxAction('update-agents')}
+                >${this._sandboxBusy === 'update-agents' ? 'Updating agent CLIs…' : 'Update agent CLIs'}</button>
                 <button
                   class="menu-item"
                   ?disabled=${!!this._sandboxBusy}
