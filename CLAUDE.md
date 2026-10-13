@@ -83,7 +83,8 @@ Workstream rows live in the same `projects` array and additionally carry `parent
 | `DELETE` | `/api/projects/:id/shared-files` | Remove all of a project's shared files. |
 | `GET` | `/api/volumes` | List podman volumes: `{ name, createdAt, project, projectLabel, containers, inUse }` (`project` from the compose label; `projectLabel` is `null` when that project was deleted). |
 | `DELETE` | `/api/volumes/:name` | Delete a volume (`podman volume rm -f`, which also removes stopped containers referencing it). 409 while a running container mounts it. |
-| `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current `claude-inner` image. |
+| `POST` | `/api/sandbox/restart` | Tear down all live agent/shell sessions so they respawn with the current image (the top-bar menu's **Restart all sandboxes**, off a project page). |
+| `POST` | `/api/projects/:id/sandbox/restart` | Tear down just this project/workstream's agent and shell sessions (**Restart this sandbox** on a project page) — rebuilding its sandbox image if `.loop/` changed. |
 | `POST` | `/api/sandbox/update-agents` | Install the latest agent CLIs into the `loop-agents` volume, then restart sessions. Returns `{ versions: { id, claude, codex, node } }`. |
 
 WebSocket endpoint: `ws://host/api/projects/:id/ws/:type` where `type` is `agent` or `shell`.
@@ -184,6 +185,15 @@ Shell sessions are left alone either way; they run bash on both.
 The `shell` session type runs `bash` in the same container. It also mounts `/claudeconfig` and sets `GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig` so the git credential helper works there (see GitHub auth below).
 
 Sessions are keyed by `projectId:type` and reused across reconnects while alive.
+
+### Per-project sandbox images — `backend/src/sandbox-image.js`
+
+A repo extends its sandbox with **`.loop/sandbox.Dockerfile`**: a Dockerfile *fragment* (RUN/ENV/COPY…, no `FROM`) layered on `claude-inner`, built with `.loop/` as the context. It replaces agents keeping setup scripts and reinstalling tools every session. `AGENT_INSTRUCTIONS` tells both CLIs to put tools there.
+
+- **Content-addressed**: the image is `loop-sandbox:<sha256(base image id + every file under .loop/)[:16]>`. Identical `.loop/` → one shared image across workstreams/projects; an unchanged fragment costs a `podman image exists`; an edit yields a new tag on the next session start (running sessions keep theirs until restarted — **Restart this sandbox**). Because the agent CLIs live on the `loop-agents` volume, updating them never invalidates these images.
+- **The build runs in the terminal**: `getOrCreateSession` calls `prepareSandbox(repoPath)`; when the tag is missing, `sandboxCommand()` wraps the session's `podman run` argv (which carries `IMAGE_PLACEHOLDER` instead of an image name) in a `sh -c` script that runs `podman build` first, so its output streams into the agent/shell tab. `flock` on `/tmp/loop-sandbox/<hash>.Dockerfile.lock` makes the agent and shell tab (or two workstreams) share one build. A failed build — or a fragment containing `FROM`, which would drop the base image and the `/opt/loop` CLI links — falls back to `claude-inner` with a coloured warning, so the agent still starts and can fix it.
+- The generated Dockerfile (`FROM claude-inner` + fragment) is written to `/tmp/loop-sandbox/`, outside the repo, so builds never dirty the working tree. `--pull=never` keeps `claude-inner` resolving to the local image.
+- **GC**: `pruneSandboxImages()` (startup, then daily) `podman rmi`s every `label=loop.sandbox=1` image no project's current `.loop/` resolves to. Without `-f` it can't remove an image a running sandbox uses; layers shared with a current image stay cached.
 
 ### Inner-to-outer IPC — `backend/src/ipc-server.js`
 

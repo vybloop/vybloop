@@ -477,7 +477,12 @@ class LoopTopBar extends LitElement {
     if (this._sandboxBusy) return;
     this._sandboxBusy = action;
     try {
-      const res = await fetch(`/api/sandbox/${action}`, { method: 'POST' });
+      // With a project in view, restart only its sandbox (e.g. to rebuild an
+      // edited .loop/sandbox.Dockerfile); elsewhere, every sandbox.
+      const url = action === 'restart' && this.project
+        ? `/api/projects/${this.project.id}/sandbox/restart`
+        : `/api/sandbox/${action}`;
+      const res = await fetch(url, { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
@@ -585,7 +590,9 @@ class LoopTopBar extends LitElement {
                   class="menu-item"
                   ?disabled=${!!this._sandboxBusy}
                   @click=${() => this._sandboxAction('restart')}
-                >${this._sandboxBusy === 'restart' ? 'Restarting sandbox…' : 'Restart sandbox'}</button>
+                >${this._sandboxBusy === 'restart'
+                  ? 'Restarting sandbox…'
+                  : this.project ? 'Restart this sandbox' : 'Restart all sandboxes'}</button>
                 <hr class="config-divider menu-divider" />
                 <button
                   class="menu-item"

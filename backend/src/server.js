@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { TerminalSession, DirectSession } from './terminal-session.js';
 import { agentCommand, installCodexConfig, EDITOR_ENV } from './agent-cli.js';
 import { AGENTS_MOUNT, AGENTS_VOLUME, agentsReady, ensureAgents, updateAgents } from './agent-toolchain.js';
+import { IMAGE_PLACEHOLDER, prepareSandbox, sandboxCommand, pruneSandboxImages } from './sandbox-image.js';
 import {
   getProjects,
   getProject,
@@ -862,6 +863,16 @@ app.post('/api/projects/:id/agent-cli', async (req, res) => {
   res.json({ agentCli });
 });
 
+// Restart just this project/workstream's agent and shell containers — e.g. to
+// pick up an edited .loop/sandbox.Dockerfile, which is rebuilt as they respawn.
+// Every other sandbox keeps running.
+app.post('/api/projects/:id/sandbox/restart', async (req, res) => {
+  if (!(await getProject(req.params.id))) return res.status(404).json({ error: 'not found' });
+  await destroyProjectSessions(req.params.id, 'agent').catch(() => {});
+  await destroyProjectSessions(req.params.id, 'shell').catch(() => {});
+  res.json({ ok: true });
+});
+
 // GitHub auth status for the settings UI: GitHub App ("app") mode with its
 // installations, or PAT fallback ("pat"/"none") mode.
 app.get('/api/config/github', async (req, res) => {
@@ -939,7 +950,7 @@ const SESSION_COMMANDS = {
     '--env', `TZ=${getTimezone()}`,
     ...EDITOR_ENV,
     '-w', '/project',
-    'claude-inner',
+    IMAGE_PLACEHOLDER,
     'bash',
   ],
 };
@@ -956,7 +967,10 @@ async function getOrCreateSession(projectId, type, repoPath) {
 
   const { terminalMode } = getConfig();
   const cwd = process.env.HOME || '/home/poduser';
-  const command = makeCommand(repoPath, projectId);
+  // The project's own image when its repo has a .loop/sandbox.Dockerfile — built
+  // first, inside this terminal, if it isn't cached yet.
+  const sandbox = await prepareSandbox(repoPath);
+  const command = sandboxCommand(sandbox, makeCommand(repoPath, projectId));
 
   const session = terminalMode === 'direct'
     ? new DirectSession({ command, cwd })
@@ -1219,6 +1233,19 @@ startCredentialBroker();
 // First start (or the volume was removed): install the agent CLIs in the
 // background; sessions opened meanwhile wait for it in getOrCreateSession.
 ensureAgents();
+
+// Drop sandbox images no project uses any more (edited fragments, deleted
+// projects) — at startup and then daily.
+async function pruneStaleSandboxImages() {
+  try {
+    const projects = await getProjects();
+    await pruneSandboxImages(projects.map(p => `/data/${p.id}/git`));
+  } catch (err) {
+    console.error('[sandbox] image prune failed:', err.message);
+  }
+}
+pruneStaleSandboxImages();
+setInterval(pruneStaleSandboxImages, 24 * 60 * 60 * 1000).unref();
 
 const PORT = process.env.PORT || 9876;
 server.listen(PORT, () => {

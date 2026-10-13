@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { getTimezone, getAgentCli } from './data.js';
 import { AGENTS_MOUNT } from './agent-toolchain.js';
+import { IMAGE_PLACEHOLDER } from './sandbox-image.js';
 
 // CODEX_HOME lives under /claudeconfig — the same mount Claude Code's config
 // uses — so a `codex login` inside one throwaway agent container survives into
@@ -18,6 +19,7 @@ export const AGENT_INSTRUCTIONS = [
   'You may freely install any Linux tools or packages you need (e.g. via apt-get, pip, npm, cargo, etc.).',
   'You cannot run Docker or Podman containers directly inside this sandbox.',
   'If the project has a docker-compose.yml at the repo root, instruct the user to start or restart the app using the "Run" or "Restart" button in the Loop UI — do not attempt to run compose yourself.',
+  'Tools the project needs in every session (system packages, SDKs, CLIs) belong in `.loop/sandbox.Dockerfile`: a Dockerfile fragment of RUN/ENV/COPY lines (no FROM — Loop layers it on the base sandbox image, with `.loop/` as the build context) that is built once and cached, so new sessions and workstreams start with the tools already installed. Prefer it over setup scripts. When you add something there, also install it in this session so you can keep working; the image is rebuilt the next time the sandbox starts, so tell the user to restart the sandbox from the Loop menu to verify the build. Keep each RUN self-contained (e.g. `apt-get update && apt-get install -y …`).',
   'Compose files must never hard-code a host port: the host port is assigned automatically and passed in as the HOST_PORT environment variable, so publish ports as "${HOST_PORT}:<container port>".',
   'To share a file with the user, run `sh /claudeconfig/loop-share.sh <file-or-directory> [caption]` — it appears in a side panel in the Loop UI, where images are previewed and anything else can be downloaded. Use it whenever a picture (e.g. a screenshot) explains the result better than text, and to hand over deliverables such as a built app, installer, binary, PDF or data export. Sharing a directory archives it first (zip), so share the build output directory (e.g. dist/), not the whole repo or node_modules.',
 ];
@@ -51,7 +53,7 @@ const AGENT_COMMANDS = {
     '--env', 'DISABLE_AUTOUPDATER=1',
     ...commonEnv(projectId),
     '-w', '/project',
-    'claude-inner',
+    IMAGE_PLACEHOLDER,
     'claude', '--dangerously-skip-permissions',
     '--append-system-prompt', AGENT_INSTRUCTIONS.join(' '),
   ],
@@ -67,7 +69,7 @@ const AGENT_COMMANDS = {
     '--env', 'OPENAI_API_KEY',
     ...commonEnv(projectId),
     '-w', '/project',
-    'claude-inner',
+    IMAGE_PLACEHOLDER,
     'codex', '--dangerously-bypass-approvals-and-sandbox',
   ],
 };
