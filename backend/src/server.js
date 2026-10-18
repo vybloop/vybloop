@@ -10,7 +10,13 @@ import { existsSync } from 'fs';
 import { TerminalSession, DirectSession } from './terminal-session.js';
 import { agentCommand, installCodexConfig, EDITOR_ENV } from './agent-cli.js';
 import { AGENTS_MOUNT, AGENTS_VOLUME, agentsReady, ensureAgents, updateAgents } from './agent-toolchain.js';
-import { IMAGE_PLACEHOLDER, prepareSandbox, sandboxCommand, pruneSandboxImages } from './sandbox-image.js';
+import {
+  IMAGE_PLACEHOLDER, prepareSandbox, sandboxCommand, pruneSandboxImages, describeSandbox,
+  readSandboxConfig, writeSandboxConfig, readSandboxFragment, removeSandboxFragment,
+} from './sandbox-image.js';
+import {
+  listLayers, getLayer, createLayer, updateLayer, deleteLayer, isLayerId, layerFragmentError, writeAgentIndex,
+} from './sandbox-layers.js';
 import {
   getProjects,
   getProject,
@@ -873,6 +879,131 @@ app.post('/api/projects/:id/sandbox/restart', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Sandbox images & layer library ───────────────────────────────────────────
+// See sandbox-image.js / sandbox-layers.js. A project's choice of library layers
+// lives in its repo (.loop/sandbox.json), so it is versioned, follows workstream
+// branches, and shows up in the changes panel like any other edit.
+
+function sendError(res, err) {
+  res.status(err.status || 500).json({ error: err.message });
+}
+
+// Every library layer, with the projects/workstreams whose .loop/sandbox.json
+// uses it.
+app.get('/api/sandbox-layers', async (req, res) => {
+  try {
+    const projects = await getProjects();
+    const usedBy = new Map();
+    for (const p of projects) {
+      let use = [];
+      try { use = readSandboxConfig(`/data/${p.id}/git`).use; } catch {}
+      for (const id of use) {
+        if (!usedBy.has(id)) usedBy.set(id, []);
+        usedBy.get(id).push({ id: p.id, label: getProjectLabel(p.id) });
+      }
+    }
+    res.json(listLayers().map(l => ({ ...l, usedBy: usedBy.get(l.id) || [] })));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.post('/api/sandbox-layers', (req, res) => {
+  try {
+    res.status(201).json(createLayer(req.body || {}));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+app.put('/api/sandbox-layers/:layerId', (req, res) => {
+  try {
+    res.json(updateLayer(req.params.layerId, req.body || {}));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// Deletes a user layer, or reverts a modified built-in. Projects still listing a
+// deleted layer skip it with a warning in their terminal.
+app.delete('/api/sandbox-layers/:layerId', (req, res) => {
+  try {
+    deleteLayer(req.params.layerId);
+    res.json({ ok: true, layer: getLayer(req.params.layerId) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// The image a sessions starting now would use vs. the one running, so the UI
+// can offer a restart when they differ.
+async function projectSandboxState(id) {
+  const repoPath = `/data/${id}/git`;
+  let use = [];
+  let configError = null;
+  try { use = readSandboxConfig(repoPath).use; } catch (err) { configError = err.message; }
+  const running = ['agent', 'shell']
+    .map(type => sessions.get(sessionKey(id, type)))
+    .find(s => s?.alive)?.sandboxImage || null;
+  const sandbox = await describeSandbox(repoPath);
+  return {
+    use,
+    configError,
+    fragment: readSandboxFragment(repoPath),
+    ...sandbox,
+    running,
+    stale: !!running && running !== sandbox.image,
+  };
+}
+
+app.get('/api/projects/:id/sandbox', async (req, res) => {
+  if (!(await getProject(req.params.id))) return res.status(404).json({ error: 'not found' });
+  try {
+    res.json(await projectSandboxState(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// Set which library layers the project uses (writes .loop/sandbox.json). Takes
+// effect when its sandbox next starts.
+app.put('/api/projects/:id/sandbox', async (req, res) => {
+  if (!(await getProject(req.params.id))) return res.status(404).json({ error: 'not found' });
+  const { use } = req.body || {};
+  if (!Array.isArray(use) || !use.every(isLayerId)) return res.status(400).json({ error: 'use must be an array of layer ids' });
+  const unknown = use.filter(id => !getLayer(id));
+  if (unknown.length) return res.status(400).json({ error: `Unknown layer${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}` });
+  try {
+    writeSandboxConfig(`/data/${req.params.id}/git`, use);
+    res.json(await projectSandboxState(req.params.id));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// Promote the project's .loop/sandbox.Dockerfile to a library layer. With
+// `replace`, the project then uses the new layer instead of its own file — the
+// generated Dockerfile is unchanged, so the rebuild is fully cached.
+app.post('/api/projects/:id/sandbox/promote', async (req, res) => {
+  if (!(await getProject(req.params.id))) return res.status(404).json({ error: 'not found' });
+  const repoPath = `/data/${req.params.id}/git`;
+  const fragment = readSandboxFragment(repoPath);
+  if (fragment === null) return res.status(400).json({ error: 'This project has no .loop/sandbox.Dockerfile.' });
+  const { name, description, replace } = req.body || {};
+  const problem = layerFragmentError(fragment);
+  if (problem) return res.status(400).json({ error: problem });
+  try {
+    const layer = createLayer({ name, description, fragment });
+    if (replace) {
+      writeSandboxConfig(repoPath, [...readSandboxConfig(repoPath).use, layer.id]);
+      removeSandboxFragment(repoPath);
+    }
+    res.status(201).json({ layer, sandbox: await projectSandboxState(req.params.id) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // GitHub auth status for the settings UI: GitHub App ("app") mode with its
 // installations, or PAT fallback ("pat"/"none") mode.
 app.get('/api/config/github', async (req, res) => {
@@ -978,6 +1109,9 @@ async function getOrCreateSession(projectId, type, repoPath) {
 
   // A destroyed session exits asynchronously, possibly after its replacement
   // was created under the same key — leave the replacement alone.
+  // What the session was started on — compared against the current resolution
+  // to tell the UI the sandbox is out of date.
+  session.sandboxImage = sandbox.image;
   session.onExit = () => {
     if (sessions.get(key) !== session) return;
     sessions.delete(key);
@@ -1229,6 +1363,7 @@ try {
 }
 
 startCredentialBroker();
+writeAgentIndex();
 
 // First start (or the volume was removed): install the agent CLIs in the
 // background; sessions opened meanwhile wait for it in getOrCreateSession.

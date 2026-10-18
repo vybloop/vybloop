@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { iconMenu } from './icons.js';
 import './loop-volumes-dialog.js';
+import './loop-sandbox-dialog.js';
 
 const DEFAULT_TIMEZONE = 'America/Los_Angeles';
 
@@ -79,6 +80,7 @@ class LoopTopBar extends LitElement {
     _menuOpen: { state: true },
     _sandboxBusy: { state: true },
     _volumesOpen: { state: true },
+    _sandboxToolsOpen: { state: true },
   };
 
   static styles = css`
@@ -345,6 +347,7 @@ class LoopTopBar extends LitElement {
     this._menuOpen = false;
     this._sandboxBusy = '';
     this._volumesOpen = false;
+    this._sandboxToolsOpen = false;
     // Optimistic per-project pick, so the switch flips immediately instead of
     // waiting for the parent screen to refetch the project.
     this._pendingCli = null;
@@ -596,6 +599,10 @@ class LoopTopBar extends LitElement {
                 <hr class="config-divider menu-divider" />
                 <button
                   class="menu-item"
+                  @click=${() => { this._menuOpen = false; this._sandboxToolsOpen = true; }}
+                >Sandbox tools…</button>
+                <button
+                  class="menu-item"
                   @click=${() => { this._menuOpen = false; this._volumesOpen = true; }}
                 >Manage volumes…</button>
               </div>
@@ -677,6 +684,12 @@ class LoopTopBar extends LitElement {
           </div>
         </div>
       </div>
+      ${this._sandboxToolsOpen ? html`
+        <loop-sandbox-dialog
+          .projectId=${this.project?.id ?? null}
+          @close=${() => { this._sandboxToolsOpen = false; }}
+        ></loop-sandbox-dialog>
+      ` : ''}
       ${this._volumesOpen ? html`
         <loop-volumes-dialog
           .projectId=${this.project?.id ?? null}
