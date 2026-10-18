@@ -2671,17 +2671,29 @@ class LoopProjectScreen extends LitElement {
     }
   }
 
-  async _uploadFiles(files, dirPath) {
-    if (!files.length || !this.project) return;
+  // `items` are `{ file, dir }` (dir relative to the drop target, '' for the
+  // target itself) and `{ dir }` for an empty directory to create.
+  async _uploadFiles(items, dirPath) {
+    if (!items.length || !this.project) return;
     this._uploading = true;
     this._uploadError = null;
-    const dir = encodeURIComponent(dirPath ?? '');
+    const join = (a, b) => [a, b].filter(Boolean).join('/');
     try {
-      for (const file of Array.from(files)) {
+      for (const { file, dir: relDir } of items) {
+        const dir = join(dirPath, relDir);
+        if (!file) {
+          const res = await fetch(`/api/projects/${this.project.id}/fs/mkdir`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: dir }),
+          });
+          if (!res.ok) throw new Error(`${dir}: could not create folder (${res.status})`);
+          continue;
+        }
         // Send the file as the raw request body: base64 in a JSON body inflates
         // large files by a third and has to be built as one giant string first.
         const url = `/api/projects/${this.project.id}/upload-raw`
-          + `?dir=${dir}&name=${encodeURIComponent(file.name)}`;
+          + `?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`;
         let res;
         try {
           res = await fetch(url, {
@@ -2690,11 +2702,11 @@ class LoopProjectScreen extends LitElement {
             body: file,
           });
         } catch (e) {
-          throw new Error(`${file.name}: ${e.message}`);
+          throw new Error(`${join(relDir, file.name)}: ${e.message}`);
         }
         if (!res.ok) {
           const detail = await res.json().catch(() => null);
-          throw new Error(`${file.name}: ${detail?.error || `upload failed (${res.status})`}`);
+          throw new Error(`${join(relDir, file.name)}: ${detail?.error || `upload failed (${res.status})`}`);
         }
       }
       await this._loadFileTree();
@@ -2746,8 +2758,46 @@ class LoopProjectScreen extends LitElement {
       this._moveItems(pathsToMove, dir ?? '');
       return;
     }
+    // A dropped folder shows up in `dataTransfer.files` as an unreadable
+    // pseudo-file, so walk the entries instead. They must be taken now: the
+    // DataTransfer is emptied once this handler returns.
+    const entries = Array.from(e.dataTransfer.items ?? [])
+      .filter(item => item.kind === 'file')
+      .map(item => item.webkitGetAsEntry?.())
+      .filter(Boolean);
+    if (entries.length) {
+      this._collectDroppedEntries(entries)
+        .then(items => this._uploadFiles(items, dir))
+        .catch(err => { this._uploadError = err.message; });
+      return;
+    }
     const files = Array.from(e.dataTransfer.files);
-    if (files.length) this._uploadFiles(files, dir);
+    if (files.length) this._uploadFiles(files.map(file => ({ file, dir: '' })), dir);
+  }
+
+  // Flatten dropped FileSystemEntries into `_uploadFiles` items, keeping each
+  // file's folder relative to the drop target. Empty folders become `{ dir }`.
+  async _collectDroppedEntries(entries, relDir = '') {
+    const items = [];
+    for (const entry of entries) {
+      if (entry.isFile) {
+        const file = await new Promise((res, rej) => entry.file(res, rej));
+        items.push({ file, dir: relDir });
+      } else if (entry.isDirectory) {
+        const sub = relDir ? `${relDir}/${entry.name}` : entry.name;
+        const reader = entry.createReader();
+        const children = [];
+        // readEntries returns results in batches (100 in Chrome) until empty.
+        for (;;) {
+          const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+          if (!batch.length) break;
+          children.push(...batch);
+        }
+        if (children.length) items.push(...await this._collectDroppedEntries(children, sub));
+        else items.push({ dir: sub });
+      }
+    }
+    return items;
   }
 
   async _moveItems(fromPaths, toDir) {
