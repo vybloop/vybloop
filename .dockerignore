@@ -2,3 +2,7 @@ podman-web/claude-config/
 podman-web/project/
 # Never bake the GitHub App private key into the image; it's mounted at runtime.
 *.pem
+# Runtime data (project repos, per-instance dirs) — never part of the image, and
+# may contain dirs the builder cannot read.
+data/
+tasha/
