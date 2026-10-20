@@ -269,6 +269,8 @@ Allocation lives in `backend/src/data.js`:
 
 `composeEnv(id)` wraps `getHostPort(id)` and must be passed to **every** compose call — `up`, `down`, `ps -q`, and `logs -f` (`log-manager.js`) — because compose interpolates the file on each of them, and an unset `HOST_PORT` there would not match the running stack.
 
+**Host networking**: a `network_mode: host` service has no mapping for `podman port` to report. Because Loop's own container is host-networked, such a service shares the backend's network namespace, so `getContainerPorts()` instead checks (`podman inspect` → `HostConfig.NetworkMode`) for host-mode containers and TCP-probes `127.0.0.1:${HOST_PORT}`; the service must listen on `HOST_PORT` itself (passed in via `environment:`).
+
 Allocation only avoids ports Loop itself knows about; it does not probe the host, so keep `portRange` clear of other listeners.
 
 **Compose provider**: `podman-compose` is installed in the app container (`Dockerfile`). Short image names (e.g. `golang:1.23-alpine`) resolve via `docker.io` thanks to `/etc/containers/registries.conf` set in the `podman-base` image (`podman/Dockerfile`).

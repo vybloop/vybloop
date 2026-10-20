@@ -25,6 +25,10 @@ services:
 
 The container-side port (\`8080\` above) is the project's own choice and can be
 whatever the app listens on. Only the host side comes from \`HOST_PORT\`.
+
+A service that needs \`network_mode: host\` has no port mapping, so it must
+listen on \`HOST_PORT\` itself instead, e.g. \`environment: [ "PORT=\${HOST_PORT}" ]\`.
+Loop detects it by connecting to that port.
 `;
 
 export const TEMPLATES = [

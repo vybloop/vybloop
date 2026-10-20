@@ -7,6 +7,7 @@ import { dirname, join, extname } from 'path';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
+import { connect } from 'net';
 import { TerminalSession, DirectSession } from './terminal-session.js';
 import { agentCommand, installCodexConfig, EDITOR_ENV } from './agent-cli.js';
 import { AGENTS_MOUNT, AGENTS_VOLUME, agentsReady, ensureAgents, updateAgents } from './agent-toolchain.js';
@@ -61,6 +62,7 @@ import {
   getWorkstreamIds,
   getProjectLabel,
   composeEnv,
+  getHostPort,
   setProjectAgentCli,
   AGENT_CLIS,
 } from './data.js';
@@ -102,7 +104,17 @@ async function getContainerPorts(projectId, repoPath) {
   const { stdout: idsOut } = await execFileAsync('podman', ['compose', '-p', projectId, 'ps', '-q'], { cwd: repoPath, env: composeEnv(projectId) });
   const ids = idsOut.trim().split('\n').filter(Boolean);
   const ports = [];
+  let hostNetwork = false;
   for (const containerId of ids) {
+    // A `network_mode: host` service publishes nothing, so `podman port` is empty.
+    // Loop's own container is host-networked too, so such a service shares our
+    // network: look for it listening on HOST_PORT directly.
+    const { stdout: mode } = await execFileAsync('podman', ['inspect', '--format', '{{.HostConfig.NetworkMode}}', containerId])
+      .catch(() => ({ stdout: '' }));
+    if (mode.trim() === 'host') {
+      hostNetwork = true;
+      continue;
+    }
     try {
       const { stdout } = await execFileAsync('podman', ['port', containerId]);
       for (const line of stdout.trim().split('\n').filter(Boolean)) {
@@ -111,7 +123,21 @@ async function getContainerPorts(projectId, repoPath) {
       }
     } catch { /* container may have no exposed ports */ }
   }
+  const hostPort = getHostPort(projectId);
+  if (hostNetwork && hostPort && !ports.some((p) => p.hostPort === hostPort) && await isListening(hostPort)) {
+    ports.unshift({ containerPort: hostPort, protocol: 'tcp', hostPort });
+  }
   return ports;
+}
+
+function isListening(port, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    const sock = connect({ host: '127.0.0.1', port });
+    const done = (ok) => { sock.destroy(); resolve(ok); };
+    sock.setTimeout(timeoutMs, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
 }
 
 // Publish a project's port mappings to connected clients. `podman compose up -d`
@@ -146,7 +172,7 @@ async function publishPorts(projectId, repoPath, { attempts = 20, intervalMs = 1
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   // Giving up leaves the UI on "starting…" with no other signal, so explain it here.
-  buf.add(`[loop] No published host ports found after ${Math.round((attempts * intervalMs) / 1000)}s, so the UI will stay on "starting…". A service must publish "\${HOST_PORT}:<port>". Container states:`);
+  buf.add(`[loop] No published host ports found after ${Math.round((attempts * intervalMs) / 1000)}s, so the UI will stay on "starting…". A service must publish "\${HOST_PORT}:<port>" (or, with network_mode: host, listen on port \${HOST_PORT} itself, currently ${getHostPort(projectId)}). Container states:`);
   await logContainerStates(projectId, buf);
   return [];
 }
