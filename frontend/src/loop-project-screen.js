@@ -56,6 +56,8 @@ const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']);
 
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'aac', 'weba']);
+
 const _isMac = /Macintosh|MacIntel/.test(navigator.userAgent);
 const _modKey = _isMac ? '⌘' : 'Ctrl-';
 
@@ -1067,6 +1069,30 @@ class LoopProjectScreen extends LitElement {
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .audio-preview {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 16px;
+    }
+
+    .audio-preview-name {
+      font-size: 13px;
+      opacity: 0.8;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .audio-preview audio {
+      width: min(480px, 100%);
+    }
+
     .lightbox {
       position: fixed;
       inset: 0;
@@ -3596,6 +3622,11 @@ class LoopProjectScreen extends LitElement {
     return IMAGE_EXTENSIONS.has(ext);
   }
 
+  _isAudioFile(path) {
+    const ext = path.split('.').pop()?.toLowerCase() ?? '';
+    return AUDIO_EXTENSIONS.has(ext);
+  }
+
   _isImageTab(tab) {
     return this._openImages.includes(tab);
   }
@@ -3642,7 +3673,8 @@ class LoopProjectScreen extends LitElement {
   }
 
   async _openFile(filePath) {
-    if (this._isImageFile(filePath)) {
+    // Images and audio open in a preview tab instead of the editor.
+    if (this._isImageFile(filePath) || this._isAudioFile(filePath)) {
       if (!this._openImages.includes(filePath)) {
         this._openImages = [...this._openImages, filePath];
       }
@@ -5289,7 +5321,16 @@ class LoopProjectScreen extends LitElement {
           ${this._isMarkdownPreview(this._activeTab) ? this._renderMarkdownPreview(this._activeTab) : ''}
           <div id="monaco-container" style="display:${this._isFilePath(this._activeTab) && !this._isMarkdownPreview(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
           <div id="diff-container" style="display:${this._isDiffTab(this._activeTab) ? 'flex' : 'none'};flex:1;min-height:0"></div>
-          ${this._isImageTab(this._activeTab) ? html`
+          ${this._isImageTab(this._activeTab) && this._isAudioFile(this._activeTab) ? html`
+            <div class="audio-preview">
+              <div class="audio-preview-name">${this._activeTab.split('/').pop()}</div>
+              <audio
+                controls
+                preload="metadata"
+                src="/api/projects/${this.project.id}/image?path=${encodeURIComponent(this._activeTab)}"
+              ></audio>
+            </div>
+          ` : this._isImageTab(this._activeTab) ? html`
             <div style="display:flex;flex:1;min-height:0;align-items:center;justify-content:center;padding:16px;overflow:hidden">
               <img
                 src="/api/projects/${this.project.id}/image?path=${encodeURIComponent(this._activeTab)}"

@@ -41,7 +41,7 @@ import {
   setGithubPat,
   getFileTree,
   getFileContent,
-  getImageContent,
+  getMediaFilePath,
   saveFileContent,
   getFileDiff,
   uploadFiles,
@@ -666,10 +666,13 @@ app.get('/api/projects/:id/file', async (req, res) => {
   res.json(result);
 });
 
-const IMAGE_MIME_TYPES = {
+const MEDIA_MIME_TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.oga': 'audio/ogg',
+  '.opus': 'audio/ogg; codecs=opus', '.flac': 'audio/flac', '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac', '.weba': 'audio/webm',
 };
 
 app.get('/api/projects/:id/image', async (req, res) => {
@@ -677,11 +680,13 @@ app.get('/api/projects/:id/image', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'not found' });
   const filePath = req.query.path;
   if (!filePath) return res.status(400).json({ error: 'path is required' });
-  const result = getImageContent(req.params.id, filePath);
-  if (!result) return res.status(404).json({ error: 'file not found' });
-  const mime = IMAGE_MIME_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+  const abs = getMediaFilePath(req.params.id, filePath);
+  if (!abs) return res.status(404).json({ error: 'file not found' });
+  const mime = MEDIA_MIME_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
   res.setHeader('Content-Type', mime);
-  res.send(result.data);
+  res.setHeader('Cache-Control', 'no-cache');
+  // sendFile serves Range requests, so an <audio> preview can seek.
+  res.sendFile(abs, { dotfiles: 'allow' });
 });
 
 // Files an inner agent shared with the UI via /claudeconfig/loop-share.sh.

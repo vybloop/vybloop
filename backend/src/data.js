@@ -120,16 +120,15 @@ export function getFileContent(id, filePath) {
   }
 }
 
-export function getImageContent(id, filePath) {
+// Absolute path of a regular file inside the repo, for streaming previews
+// (images, audio) with res.sendFile — which also handles Range requests.
+export function getMediaFilePath(id, filePath) {
   const base = gitDir(id);
   if (!existsSync(base)) return null;
   const abs = resolve(base, normalize(filePath));
   if (!abs.startsWith(base + '/') && abs !== base) return null;
   try {
-    const stat = statSync(abs);
-    if (!stat.isFile()) return null;
-    const data = readFileSync(abs);
-    return { data };
+    return statSync(abs).isFile() ? abs : null;
   } catch {
     return null;
   }
