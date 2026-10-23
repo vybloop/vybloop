@@ -12,6 +12,7 @@ class ProjectWatcher {
     this._debounceTimer = null;
     this._chokidar = null;
     this._git = null;
+    this._worktreeChanged = false;
     this._hasCompose = getHasCompose(projectId);
     this._lastChanges = null;
     this._lastRemote = null;
@@ -24,7 +25,10 @@ class ProjectWatcher {
       ignoreInitial: true,
       persistent: true,
     });
-    this._chokidar.on('all', () => this._schedule());
+    this._chokidar.on('all', () => {
+      this._worktreeChanged = true;
+      this._schedule();
+    });
 
     // The worktree watcher ignores `.git`, so git operations run outside the UI
     // — a commit, merge, rebase or checkout typed in the shell tab — produce no
@@ -51,6 +55,7 @@ class ProjectWatcher {
   _stop() {
     clearTimeout(this._debounceTimer);
     this._debounceTimer = null;
+    this._worktreeChanged = false;
     this._chokidar?.close();
     this._chokidar = null;
     this._git?.close();
@@ -64,6 +69,10 @@ class ProjectWatcher {
 
   async _broadcast() {
     if (this.clients.size === 0) return;
+    // Only an edit to the working tree makes a running stack out of date; a
+    // commit or fetch that merely moves `.git` state must not flag it.
+    const worktreeChanged = this._worktreeChanged;
+    this._worktreeChanged = false;
     const [changes, tree, remote] = await Promise.all([
       getChanges(this.projectId),
       Promise.resolve(getFileTree(this.projectId)),
@@ -80,7 +89,7 @@ class ProjectWatcher {
     this._lastRemote = remoteJson;
 
     const wasStale = staleProjects.has(this.projectId);
-    if (runStartTimes.has(this.projectId) && !wasStale) {
+    if (worktreeChanged && runStartTimes.has(this.projectId) && !wasStale) {
       staleProjects.add(this.projectId);
     }
     const nowStale = !wasStale && staleProjects.has(this.projectId);
