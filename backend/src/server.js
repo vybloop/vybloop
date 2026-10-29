@@ -46,7 +46,7 @@ import {
   saveFileContent,
   getFileDiff,
   uploadFiles,
-  uploadFile,
+  uploadFileStream,
   createFolder,
   getProjectFolders,
   createProjectFolder,
@@ -766,15 +766,15 @@ app.post('/api/projects/:id/upload', async (req, res) => {
   res.json(result);
 });
 
-// Raw binary upload of a single file: the body is the file itself, so large
+// Raw binary upload of a single file: the body is the file itself, streamed
+// straight to disk, so there is no size limit beyond free space and large
 // uploads avoid base64 expansion and a multi-megabyte JSON body.
-app.post('/api/projects/:id/upload-raw', express.raw({ type: '*/*', limit: '1gb' }), async (req, res) => {
+app.post('/api/projects/:id/upload-raw', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
   const name = req.query.name;
   if (!name) return res.status(400).json({ error: 'name is required' });
-  if (!Buffer.isBuffer(req.body)) return res.status(400).json({ error: 'body is required' });
-  const result = uploadFile(req.params.id, req.query.dir ?? '', name, req.body);
+  const result = await uploadFileStream(req.params.id, req.query.dir ?? '', name, req);
   if (!result) return res.status(404).json({ error: 'project not found' });
   if (result.error) return res.status(400).json(result);
   res.json(result);
@@ -1304,6 +1304,9 @@ app.get('*', (req, res) => {
 });
 
 const server = createServer(app);
+// Node's default 5-minute cap on a whole request would cut off multi-gigabyte
+// uploads over a slow link. headersTimeout still guards against stalled clients.
+server.requestTimeout = 0;
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (req, socket, head) => {

@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync, rmSync, createWriteStream } from 'fs';
+import { pipeline } from 'stream/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve, normalize, basename, relative } from 'path';
 import { spawn, execFile } from 'child_process';
@@ -1090,14 +1091,27 @@ export function uploadFiles(id, dir, files) {
   return { ok: true, results };
 }
 
-// Single-file variant for the raw binary upload route: `data` is already a Buffer.
-export function uploadFile(id, dir, name, data) {
+// Single-file variant for the raw binary upload route: streams `stream` (the
+// request) to a temp file beside the target and renames it into place, so a
+// multi-gigabyte upload never sits in memory and an aborted one leaves no
+// partial file behind.
+export async function uploadFileStream(id, dir, name, stream) {
   const target = resolveUploadDir(id, dir);
   if (!target) return null;
   if (target.error) return target;
-  const result = writeUpload(target.targetDir, name, data);
-  if (!result.ok) return { error: result.error };
-  return { ok: true, results: [result] };
+  const safeName = basename(name);
+  if (!safeName || safeName === '.' || safeName === '..') return { error: 'invalid filename' };
+  const filePath = join(target.targetDir, safeName);
+  const tmpPath = join(target.targetDir, `.${safeName}.${process.pid}-${Date.now()}.uploading`);
+  try {
+    mkdirSync(target.targetDir, { recursive: true });
+    await pipeline(stream, createWriteStream(tmpPath));
+    renameSync(tmpPath, filePath);
+    return { ok: true, results: [{ name: safeName, ok: true }] };
+  } catch (e) {
+    rmSync(tmpPath, { force: true });
+    return { error: e.message };
+  }
 }
 
 export function createFolder(id, dirPath) {

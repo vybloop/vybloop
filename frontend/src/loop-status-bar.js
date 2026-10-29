@@ -1,10 +1,12 @@
 import { LitElement, html, css } from 'lit';
 
 // A thin status strip for background activity. Each item is
-//   { id, label, detail?, progress? }
+//   { id, label, detail?, progress?, error?, dismissible? }
 // where `progress` is 0..1 for a determinate bar, `null` for an indeterminate
-// one, and absent (undefined) for a plain text line with no bar. Renders
-// nothing when `items` is empty, so the host can always be mounted.
+// one, and absent (undefined) for a plain text line with no bar. `error` tints
+// the item; `dismissible` adds an × that fires a `dismiss` event with
+// `detail: { id }` — the host removes the item. Renders nothing when `items`
+// is empty, so the host can always be mounted.
 class LoopStatusBar extends LitElement {
   static properties = {
     items: { attribute: false },
@@ -41,6 +43,25 @@ class LoopStatusBar extends LitElement {
       min-width: 0;
       flex: 1;
     }
+    .item.error .label { color: var(--del); }
+    .item.error .detail {
+      color: var(--fg-2);
+      white-space: normal;
+      word-break: break-word;
+    }
+    .dismiss {
+      flex-shrink: 0;
+      margin-left: auto;
+      align-self: flex-start;
+      background: none;
+      border: none;
+      padding: 0 2px;
+      color: var(--fg-3);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .dismiss:hover { color: var(--fg-1); }
     .pct { color: var(--fg-2); font-family: var(--font-mono); flex-shrink: 0; margin-left: auto; }
     .track {
       height: 3px;
@@ -84,16 +105,20 @@ class LoopStatusBar extends LitElement {
     `;
   }
 
-  _renderItem({ label, detail, progress }) {
+  _renderItem({ id, label, detail, progress, error, dismissible }) {
     const hasBar = progress !== undefined;
     const determinate = typeof progress === 'number';
     const pct = determinate ? Math.round(Math.min(1, Math.max(0, progress)) * 100) : 0;
     return html`
-      <div class="item">
+      <div class="item ${error ? 'error' : ''}">
         <div class="text">
           <span class="label">${label}</span>
           ${detail ? html`<span class="detail" title=${detail}>${detail}</span>` : ''}
           ${determinate ? html`<span class="pct">${pct}%</span>` : ''}
+          ${dismissible ? html`
+            <button class="dismiss" title="Dismiss" aria-label="Dismiss"
+              @click=${() => this.dispatchEvent(new CustomEvent('dismiss', { detail: { id } }))}>×</button>
+          ` : ''}
         </div>
         ${hasBar ? html`
           <div class="track">

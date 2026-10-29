@@ -549,10 +549,6 @@ class LoopProjectScreen extends LitElement {
       color: var(--fg-3);
       font-size: 12px;
     }
-    .tree-empty.upload-error {
-      color: var(--del);
-      word-break: break-word;
-    }
     .file-tree.drag-over {
       background: oklch(0.84 0.18 130 / 0.05);
       outline: 2px dashed var(--accent);
@@ -2794,11 +2790,17 @@ class LoopProjectScreen extends LitElement {
 
   // Items for the sidebar status bar. Only uploads use it for now.
   _statusItems() {
+    const items = [];
+    if (this._uploadError) {
+      items.push({ id: 'upload-error', label: 'Upload failed', detail: this._uploadError, error: true, dismissible: true });
+    }
     const p = this._uploadProgress;
-    if (!p) return [];
-    if (p.total === null) return [{ id: 'upload', label: 'Preparing upload…', progress: null }];
-    const fmt = n => n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
-    return [{
+    if (!p) return items;
+    if (p.total === null) return [...items, { id: 'upload', label: 'Preparing upload…', progress: null }];
+    const fmt = n => n < 1024 * 1024 ? `${Math.round(n / 1024)} KB`
+      : n < 1024 ** 3 ? `${(n / 1024 / 1024).toFixed(1)} MB`
+      : `${(n / 1024 ** 3).toFixed(2)} GB`;
+    return [...items, {
       id: 'upload',
       label: `Uploading ${Math.min(p.done + 1, p.total)}/${p.total}`,
       detail: p.totalBytes ? `${fmt(p.loaded)} / ${fmt(p.totalBytes)} · ${p.name}` : p.name,
@@ -5101,7 +5103,6 @@ class LoopProjectScreen extends LitElement {
                   }
                 </div>
               ` : ''}
-              ${this._uploadError ? html`<div class="tree-empty upload-error">${this._uploadError}</div>` : ''}
             </div>
           ` : ''}
         </div>
@@ -5138,7 +5139,8 @@ class LoopProjectScreen extends LitElement {
           ` : ''}
         </div>
 
-        <loop-status-bar .items=${this._statusItems()}></loop-status-bar>
+        <loop-status-bar .items=${this._statusItems()}
+          @dismiss=${e => { if (e.detail.id === 'upload-error') this._uploadError = null; }}></loop-status-bar>
       </div>
     `;
   }
