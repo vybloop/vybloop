@@ -76,6 +76,7 @@ import {
 import { startCredentialBroker } from './git-credential-broker.js';
 import { getGithubStatus, createRepo, listRepoTargets } from './git-auth.js';
 import { startBuildCapture, startLogCapture, stopLogCapture, getOrCreateBuffer } from './log-manager.js';
+import { pruneProjectStorage } from './storage-gc.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1400,18 +1401,26 @@ writeAgentIndex();
 // background; sessions opened meanwhile wait for it in getOrCreateSession.
 ensureAgents();
 
-// Drop sandbox images no project uses any more (edited fragments, deleted
-// projects) — at startup and then daily.
-async function pruneStaleSandboxImages() {
+// Reclaim podman storage, at startup and then daily: sandbox images no project
+// uses any more (edited fragments, deleted projects), then deleted projects'
+// compose images and volumes and superseded builds (storage-gc.js).
+async function pruneStorage() {
   try {
     const projects = await getProjects();
     await pruneSandboxImages(projects.map(p => `/data/${p.id}/git`));
   } catch (err) {
     console.error('[sandbox] image prune failed:', err.message);
   }
+  try {
+    // A project counts as deleted only when its row AND its data dir are gone,
+    // so an unreadable projects.json (which loads as an empty list) deletes nothing.
+    await pruneProjectStorage(id => getProjectLabel(id) !== null || existsSync(`/data/${id}`));
+  } catch (err) {
+    console.error('[gc] storage prune failed:', err.message);
+  }
 }
-pruneStaleSandboxImages();
-setInterval(pruneStaleSandboxImages, 24 * 60 * 60 * 1000).unref();
+pruneStorage();
+setInterval(pruneStorage, 24 * 60 * 60 * 1000).unref();
 
 const PORT = process.env.PORT || 9876;
 server.listen(PORT, () => {

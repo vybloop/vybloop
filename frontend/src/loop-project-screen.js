@@ -4,6 +4,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import './loop-top-bar.js';
+import './loop-status-bar.js';
 import {
   iconArrowLeft, iconPlay, iconStop, iconRefresh,
   iconExternal, iconTerminal, iconSparkle, iconCopy, iconCheck,
@@ -98,6 +99,9 @@ class LoopProjectScreen extends LitElement {
     _dropTargetDir: { state: true },
     _draggingPath: { state: true },
     _uploading: { state: true },
+    // { done, total, loaded, totalBytes, name } while an upload runs; `total`
+    // is null while a dropped folder is still being walked.
+    _uploadProgress: { state: true },
     _uploadError: { state: true },
     _selectedFiles: { state: true },
     _lastSelectedFile: { state: true },
@@ -180,6 +184,15 @@ class LoopProjectScreen extends LitElement {
     .sidebar-resizer:hover::before,
     .sidebar-resizer.dragging::before {
       background: var(--accent);
+    }
+    /* Pinned to the bottom of the sidebar's scroll area: margin-top pushes it
+       down when the content is short, sticky keeps it in view when it's long. */
+    .sidebar > loop-status-bar {
+      position: sticky;
+      bottom: 0;
+      margin-top: auto;
+      flex-shrink: 0;
+      z-index: 5;
     }
     .sidebar-top {
       padding: 12px;
@@ -1961,6 +1974,7 @@ class LoopProjectScreen extends LitElement {
     this._dropTargetDir = null;
     this._draggingPath = null;
     this._uploading = false;
+    this._uploadProgress = null;
     this._uploadError = null;
     this._selectedFiles = new Set();
     this._lastSelectedFile = null;
@@ -2704,9 +2718,19 @@ class LoopProjectScreen extends LitElement {
     this._uploading = true;
     this._uploadError = null;
     const join = (a, b) => [a, b].filter(Boolean).join('/');
+    const progress = {
+      done: 0,
+      total: items.length,
+      loaded: 0,
+      totalBytes: items.reduce((n, { file }) => n + (file?.size ?? 0), 0),
+      name: '',
+    };
+    this._uploadProgress = { ...progress };
     try {
       for (const { file, dir: relDir } of items) {
         const dir = join(dirPath, relDir);
+        progress.name = join(relDir, file?.name);
+        this._uploadProgress = { ...progress };
         if (!file) {
           const res = await fetch(`/api/projects/${this.project.id}/fs/mkdir`, {
             method: 'POST',
@@ -2714,26 +2738,29 @@ class LoopProjectScreen extends LitElement {
             body: JSON.stringify({ path: dir }),
           });
           if (!res.ok) throw new Error(`${dir}: could not create folder (${res.status})`);
+          progress.done++;
           continue;
         }
         // Send the file as the raw request body: base64 in a JSON body inflates
         // large files by a third and has to be built as one giant string first.
         const url = `/api/projects/${this.project.id}/upload-raw`
           + `?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`;
+        const base = progress.loaded;
         let res;
         try {
-          res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: file,
+          res = await this._postWithProgress(url, file, sent => {
+            this._uploadProgress = { ...progress, loaded: base + sent };
           });
         } catch (e) {
           throw new Error(`${join(relDir, file.name)}: ${e.message}`);
         }
         if (!res.ok) {
-          const detail = await res.json().catch(() => null);
+          let detail = null;
+          try { detail = JSON.parse(res.body); } catch {}
           throw new Error(`${join(relDir, file.name)}: ${detail?.error || `upload failed (${res.status})`}`);
         }
+        progress.loaded = base + file.size;
+        progress.done++;
       }
       await this._loadFileTree();
       this._loadChanges();
@@ -2742,7 +2769,41 @@ class LoopProjectScreen extends LitElement {
       this._uploadError = e.message;
     } finally {
       this._uploading = false;
+      this._uploadProgress = null;
     }
+  }
+
+  // fetch() can't report upload progress, so this one goes through XHR.
+  // Resolves with { ok, status, body } once the response arrives.
+  _postWithProgress(url, body, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = e => onProgress(e.loaded);
+      xhr.onload = () => resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        body: xhr.responseText,
+      });
+      xhr.onerror = () => reject(new Error('network error'));
+      xhr.onabort = () => reject(new Error('upload aborted'));
+      xhr.send(body);
+    });
+  }
+
+  // Items for the sidebar status bar. Only uploads use it for now.
+  _statusItems() {
+    const p = this._uploadProgress;
+    if (!p) return [];
+    if (p.total === null) return [{ id: 'upload', label: 'Preparing upload…', progress: null }];
+    const fmt = n => n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return [{
+      id: 'upload',
+      label: `Uploading ${Math.min(p.done + 1, p.total)}/${p.total}`,
+      detail: p.totalBytes ? `${fmt(p.loaded)} / ${fmt(p.totalBytes)} · ${p.name}` : p.name,
+      progress: p.totalBytes ? p.loaded / p.totalBytes : p.done / p.total,
+    }];
   }
 
   _onTreeDragOver(e, dirPath) {
@@ -2792,9 +2853,11 @@ class LoopProjectScreen extends LitElement {
       .map(item => item.webkitGetAsEntry?.())
       .filter(Boolean);
     if (entries.length) {
+      this._uploadProgress = { done: 0, total: null };
       this._collectDroppedEntries(entries)
         .then(items => this._uploadFiles(items, dir))
-        .catch(err => { this._uploadError = err.message; });
+        .catch(err => { this._uploadError = err.message; })
+        .finally(() => { if (!this._uploading) this._uploadProgress = null; });
       return;
     }
     const files = Array.from(e.dataTransfer.files);
@@ -5038,7 +5101,6 @@ class LoopProjectScreen extends LitElement {
                   }
                 </div>
               ` : ''}
-              ${this._uploading ? html`<div class="tree-empty">Uploading…</div>` : ''}
               ${this._uploadError ? html`<div class="tree-empty upload-error">${this._uploadError}</div>` : ''}
             </div>
           ` : ''}
@@ -5075,6 +5137,8 @@ class LoopProjectScreen extends LitElement {
             ${this._renderSearchResults()}
           ` : ''}
         </div>
+
+        <loop-status-bar .items=${this._statusItems()}></loop-status-bar>
       </div>
     `;
   }
