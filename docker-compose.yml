@@ -1,6 +1,18 @@
 services:
+  # The base image (Ubuntu + rootless podman) the app is built on. Never run on
+  # its own: scale 0 makes `up` build it (via the loop service's
+  # additional_contexts reference) without starting a container. Tagged
+  # podman-base so podman-web/ can build FROM it too.
+  podman-base:
+    build: ./podman
+    image: podman-base
+    scale: 0
+
   loop:
-    build: .
+    build:
+      context: .
+      additional_contexts:
+        podman-base: service:podman-base
     privileged: true
     network_mode: host
     restart: unless-stopped

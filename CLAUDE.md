@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Run
 
-The app needs the `podman-base` image to be built first (in the `podman` directory). After that it can be run with docker compose. In most cases there should be no need to run the app while doing UI changes.
+`docker compose up --build` builds everything: the `podman-base` image (`podman/`) is a `scale: 0` service that the `loop` service pulls in through `additional_contexts: podman-base: service:podman-base`, so compose builds it first but never runs it. It is still tagged `podman-base` for `podman-web/`. In most cases there should be no need to run the app while doing UI changes.
 
 ### Startup status page — `backend/src/init-server.js`
 

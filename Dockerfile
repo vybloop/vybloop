@@ -6,7 +6,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM podman-base:latest
+# Supplied by docker-compose.yml (additional_contexts), which builds podman/ first.
+FROM podman-base
 USER root
 
 RUN apt-get update && apt-get install -y nodejs npm python3 python3-pip build-essential tmux catatonit \

@@ -3,10 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "==> Building podman-base image..."
-docker build -t podman-base "$SCRIPT_DIR/podman"
-
-echo "==> Building main app image..."
+# Builds podman-base (podman/) and then the app image on top of it.
+echo "==> Building images..."
 docker compose -f "$SCRIPT_DIR/docker-compose.yml" build
 
 echo ""
