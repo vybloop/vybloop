@@ -59,18 +59,25 @@ This repo is mostly empty, and is intended to be a web based game. The first tim
 - Will the game have detailed physics (more complicated than a 2D side scrolling game)?
 - Will the game have multiplayer features?
 - Will the game have any shared state between players like a high score board?
+- If multiplayer: is it competitive (players can affect each other's outcome, and cheating would matter), or cooperative/casual?
 - Will the game need to work on mobile browsers?
 
 Based on the answers to these questions, decide on a stack and fill out the section below.
 
-Suggested web stacks and technologies:
+Suggested web stacks and technologies. These are defaults and guidelines, not strict rules: if the game's needs point somewhere else, use your judgment and note the reasoning in the Stack section.
  - Vanilla JS, using Web Components for structure and CSS for styling. Avoid bundlers and frameworks unless it offers a clear advantage.
- - If a physics engine seems necessary, use Rapier.js if it seems sufficient for the game's needs.
+ - If a physics engine seems necessary, Rapier.js is a good default if it is sufficient for the game's needs.
  - In most cases with any level of graphics, use WebGL for rendering.
  - For multiplayer features, use WebSockets for real-time communication if needed.
- - If a backend is needed, default to using Go unless a specific framework/library seems well-suited
+ - If a backend is needed, Node.js is usually the best fit, because game logic can be shared between client and server. Prefer plain ES modules ("type": "module") and put code used by both sides in shared/, free of DOM- and Node-specific APIs. The server can serve shared/ statically so the browser imports the same files without a bundler. The \`ws\` package works well for WebSockets. Consider another language when a specific library or performance need clearly calls for it.
+ - For multiplayer, pick a model that suits the game. Some typical starting points:
+   - Competitive real-time: the server decides outcomes (hits, scores, pickups, win/loss). A good start is clients owning their own movement with the server validating it; full server simulation with client prediction is worth its complexity only when the game needs it.
+   - Turn-based: the server validates each move against the shared rules.
+   - Co-op/casual or collaborative: clients can own their own entities, with the server relaying state; prediction/reconciliation usually isn't needed.
+   - Single-player with leaderboards: gameplay can stay client-side, with the server storing scores and doing basic sanity checks.
+   Record the chosen model and why in the Stack section, so later sessions don't "fix" it into a different one.
  - The game should be designed to serve from a single container, so frontend content should be served from the same container as any backend code
- - If no backend is needed, use a lightweight nginx container to serve the content
+ - If no backend is needed, a lightweight nginx container is a simple way to serve the content. If a backend is added later, serve everything from the backend container instead.
 
 ## Stack
 
@@ -85,6 +92,7 @@ Fill in the rest of this section based on the answers in the first section.
 - docker-compose.yml - configure this to serve the game from a container. Publish the host port through the \`\${HOST_PORT}\` environment variable (see "Host ports" below) rather than hard-coding one.
 - frontend/ - should contain front end code
 - backend/ - should contain backend code, if necessary
+- shared/ - code used by both frontend and backend (game rules, simulation, message formats), if there is a backend
 
 ${SHARED_FOOTER}`,
   },
