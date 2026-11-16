@@ -1,6 +1,9 @@
 import chokidar from 'chokidar';
+import { basename } from 'node:path';
+import { createGitignoreMatcher } from './gitignore.js';
 import { getChanges, getFileTree, getHasCompose, getRemoteStatus } from './data.js';
 
+const GIT_DIR_RE = /(^|[\/\\])\.git([\/\\]|$)/;
 const watchers = new Map();
 const runStartTimes = new Map(); // projectId -> start timestamp (ms)
 const staleProjects = new Set(); // projects with file changes since run started
@@ -12,6 +15,7 @@ class ProjectWatcher {
     this._debounceTimer = null;
     this._chokidar = null;
     this._git = null;
+    this._gitignore = null;
     this._worktreeChanged = false;
     this._hasCompose = getHasCompose(projectId);
     this._lastChanges = null;
@@ -20,15 +24,8 @@ class ProjectWatcher {
 
   _start() {
     const repoPath = `/data/${this.projectId}/git`;
-    this._chokidar = chokidar.watch(repoPath, {
-      ignored: /(^|[\/\\])\.git([\/\\]|$)/,
-      ignoreInitial: true,
-      persistent: true,
-    });
-    this._chokidar.on('all', () => {
-      this._worktreeChanged = true;
-      this._schedule();
-    });
+    this._gitignore = createGitignoreMatcher(repoPath);
+    this._watchWorktree(repoPath);
 
     // The worktree watcher ignores `.git`, so git operations run outside the UI
     // — a commit, merge, rebase or checkout typed in the shell tab — produce no
@@ -50,6 +47,36 @@ class ProjectWatcher {
       { ignored: /\.lock$/, ignoreInitial: true, persistent: true },
     );
     this._git.on('all', () => this._schedule());
+  }
+
+  // Watch the working tree, minus `.git` and everything the repo's gitignore
+  // excludes. The watch exists to notice edits that make a running stack out of
+  // date, and ignored paths are build output, dependencies and caches: a Rust
+  // `target/` alone can hold hundreds of thousands of entries, and watching it
+  // cost an inotify watch per directory, a full crawl whenever a project page
+  // opened, and an event storm (each one a git status + file tree rebuild)
+  // during every build. chokidar never descends into an ignored directory.
+  _watchWorktree(repoPath) {
+    const gitignore = this._gitignore;
+    const watcher = chokidar.watch(repoPath, {
+      ignored: (path, stats) =>
+        GIT_DIR_RE.test(path) || gitignore.ignores(path, !!stats?.isDirectory()),
+      ignoreInitial: true,
+      persistent: true,
+    });
+    this._chokidar = watcher;
+    watcher.on('all', (event, path) => {
+      if (watcher !== this._chokidar) return; // closed or replaced
+      // New rules can both hide watched paths and expose unwatched ones, so
+      // re-read them and rebuild the watch rather than patch it.
+      if (basename(path) === '.gitignore') {
+        gitignore.invalidate();
+        watcher.close();
+        this._watchWorktree(repoPath);
+      }
+      this._worktreeChanged = true;
+      this._schedule();
+    });
   }
 
   _stop() {

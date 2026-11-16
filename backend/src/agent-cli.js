@@ -25,6 +25,15 @@ export const AGENT_INSTRUCTIONS = [
   'To share a file with the user, run `sh /claudeconfig/loop-share.sh <file-or-directory> [caption]` — it appears in a side panel in the Loop UI, where images are previewed and anything else can be downloaded. Use it whenever a picture (e.g. a screenshot) explains the result better than text, and to hand over deliverables such as a built app, installer, binary, PDF or data export. Sharing a directory archives it first (zip), so share the build output directory (e.g. dist/), not the whole repo or node_modules.',
 ];
 
+// Hardware virtualisation, when the host has it. app-entrypoint.sh makes the
+// node usable by rootless podman; every sandbox (agent and shell) gets it so
+// QEMU etc. can use -accel kvm. Compose services must ask for it themselves.
+const HAS_KVM = existsSync('/dev/kvm');
+export const KVM_DEVICE = HAS_KVM ? ['--device', '/dev/kvm'] : [];
+if (HAS_KVM) {
+  AGENT_INSTRUCTIONS.push('/dev/kvm is available in this sandbox, so QEMU and other VMs can use KVM acceleration (e.g. `-accel kvm`). A compose service that needs it must request it with `devices: ["/dev/kvm:/dev/kvm"]`.');
+}
+
 // nano is installed in claude-inner and set as git's core.editor; exporting it
 // here too makes every other tool that consults $EDITOR/$VISUAL agree.
 export const EDITOR_ENV = ['--env', 'EDITOR=nano', '--env', 'VISUAL=nano'];
@@ -38,6 +47,7 @@ function commonEnv(projectId) {
     ...EDITOR_ENV,
     '--env', `TZ=${getTimezone()}`,
     '--env', `LOOP_PROJECT_ID=${projectId}`,
+    ...KVM_DEVICE,
   ];
 }
 

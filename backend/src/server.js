@@ -9,7 +9,7 @@ import { promisify } from 'util';
 import { existsSync } from 'fs';
 import { connect } from 'net';
 import { TerminalSession, DirectSession } from './terminal-session.js';
-import { agentCommand, installCodexConfig, EDITOR_ENV } from './agent-cli.js';
+import { agentCommand, installCodexConfig, EDITOR_ENV, KVM_DEVICE } from './agent-cli.js';
 import { AGENTS_MOUNT, AGENTS_VOLUME, agentsReady, ensureAgents, updateAgents } from './agent-toolchain.js';
 import {
   IMAGE_PLACEHOLDER, prepareSandbox, sandboxCommand, pruneSandboxImages, describeSandbox,
@@ -1112,6 +1112,7 @@ const SESSION_COMMANDS = {
     '--env', 'GIT_CONFIG_GLOBAL=/claudeconfig/gitconfig',
     '--env', `TZ=${getTimezone()}`,
     ...EDITOR_ENV,
+    ...KVM_DEVICE,
     '-w', '/project',
     IMAGE_PLACEHOLDER,
     'bash',

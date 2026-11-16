@@ -193,6 +193,8 @@ The `shell` session type runs `bash` in the same container. It also mounts `/cla
 
 Sessions are keyed by `projectId:type` and reused across reconnects while alive.
 
+**KVM**: the outer container is `privileged`, so the host's `/dev/kvm` is already visible in it, but as `root:kvm 0660` (the host's kvm gid), which rootless podman can't open or pass through. `app-entrypoint.sh` `chmod 666`s it (the container's own `/dev`, not the host's). When it exists, `KVM_DEVICE` (`agent-cli.js`) adds `--device /dev/kvm` to every agent and shell sandbox, and `AGENT_INSTRUCTIONS` gets a line saying KVM is available. Compose services don't get it automatically: a project's compose file has to ask for it with `devices: ["/dev/kvm:/dev/kvm"]`.
+
 ### Per-project sandbox images — `backend/src/sandbox-image.js`
 
 A repo extends its sandbox with **`.loop/sandbox.Dockerfile`**: a Dockerfile *fragment* (RUN/ENV/COPY…, no `FROM`) layered on `claude-inner`, built with `.loop/` as the context. It replaces agents keeping setup scripts and reinstalling tools every session. `AGENT_INSTRUCTIONS` tells both CLIs to put tools there.
