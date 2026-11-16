@@ -2,6 +2,8 @@
 
 A vibe coding IDE: sandboxed Claude Code (or Codex) agents per project, plus a web UI for git, running projects, and parallel workstreams.
 
+![Screenshot of the app](.github/images/readme-ss1.png)
+
 ## Quick start
 
 ```sh
@@ -9,13 +11,11 @@ cp .env.example .env    # optional: fill in what you need (see below)
 docker compose up --build -d
 ```
 
-Open http://localhost:9876 (set `PORT` in `.env` to change it). Compose builds the `podman-base` image (`podman/`) first and the app on top of it.
+Open http://localhost:9876 (set `PORT` in `.env` to change it). Compose builds everything needed.
 
-The first start takes a few minutes while the agent sandbox image builds and the agent CLIs install; a status page shows progress until the app is ready.
+The first start takes a few minutes while the agent sandbox image builds and the agent CLIs install.
 
-**Agent credentials:** set `ANTHROPIC_API_KEY` in `.env`, or leave it unset and log in from the agent terminal; the login persists in the `claude_config` volume. For Codex, set `OPENAI_API_KEY` or run `codex login` in the sandbox.
-
-**GitHub credentials:** optional for local-only projects, but needed to clone private repos, push, or create repos. See [GitHub authentication](#github-authentication).
+**GitHub credentials:** If you want to push to github or access private repos, you'll need to set up [GitHub authentication](#github-authentication).
 
 ## Why privileged and host networking?
 
@@ -28,7 +28,7 @@ Because of this, **treat VybLoop like root on the host**, and do not expose it t
 
 ## GitHub authentication
 
-VybLoop gives every git operation, from the backend or from inside an agent sandbox, a credential through a git credential helper. Nothing is stored in clone URLs. There are two modes, picked automatically: **GitHub App** if `GITHUB_APP_ID` is set and its private key is readable, otherwise **PAT**.
+There are two auth modes. For simple personal projects, using a PAT is the simplest approach. For shared projects, you probably want to set it up as a GitHub App.
 
 ### Which one to use
 
@@ -41,12 +41,10 @@ VybLoop gives every git operation, from the backend or from inside an agent sand
 
 Other differences:
 
-- **Setup.** A PAT is one token to paste. An App has to be registered (you supply its private key), then installed on each account it should reach.
-- **Credential lifetime.** A PAT lives until it expires or is revoked, and you rotate it yourself. App installation tokens last about an hour and are minted on demand, so nothing long-lived sits in the sandbox.
+- **Setup.** A PAT is one token to paste. An App has to be registered and installed on each account it should reach.
+- **Credential lifetime.** A PAT lives until it expires or is revoked, and you rotate it yourself. App installation doesn't require periodic PAT updates.
 
 In short: **use a PAT** if you work only in your own account, especially if you want VybLoop to create repos there. **Use a GitHub App** if you work in organizations or across several accounts.
-
-Either way, an agent in a sandbox can use the credential helper, so it can push anywhere the credential can. Grant only the repos you want agents to touch.
 
 ### PAT setup
 
@@ -56,9 +54,8 @@ Either way, an agent in a sandbox can use the credential helper, so it can push 
 
 ### GitHub App setup
 
-1. On GitHub: **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App**. It needs no webhook. Repository permissions: **Contents: Read and write**, plus **Administration: Read and write** to create repos in orgs.
+1. On GitHub: **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App**. Repository permissions: **Contents: Read and write**, plus **Administration: Read and write** to create repos in orgs.
 2. Generate a private key and save it in the repo root as `vybloop.private-key.pem`. It is git-ignored and mounted read-only into the container.
 3. In `.env`, set `GITHUB_APP_ID` to the App ID and `GITHUB_APP_SLUG` to the App's URL name.
 4. Install the App on each user or org whose repos VybLoop should reach. The settings screen links to the install page and lists the current installations.
 
-If you run in PAT mode without a `.pem`, you can delete the key's volume line from `docker-compose.yml`. Otherwise Docker creates an empty directory at that path, which is harmless.
