@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The app needs the `podman-base` image to be built first (in the `podman` directory). After that it can be run with docker compose. In most cases there should be no need to run the app while doing UI changes.
 
+### Startup status page — `backend/src/init-server.js`
+
+Container startup can take minutes (`chown -R /data`, podman migrate/renumber, and on first boot or an `inner-container/Dockerfile` change the `claude-inner` build). So that visitors see something during that time, `app-entrypoint.sh` first starts `init-server.js` (as poduser, in the background, on `PORT`): a dependency-free server that answers every page with a 503 "Loop is starting up" page, `/api/*` with a 503 JSON body, and `/__loop-init/status` with `{ step, elapsed, log }`. The step comes from `/tmp/loop-init/status`, written by `step` in `start.sh`; the log is `start.sh`'s output, tee'd to `/tmp/loop-init/log`. Every response carries `X-Loop-Initializing: 1`. The page polls the status route and reloads once a response comes back without that header. Just before `exec`ing `server.js`, `start.sh` SIGTERMs the init server and waits for it to exit, which frees the port. If a step fails, `start.sh` leaves the error on the page for 60s before the container exits.
+
+It doubles as the **port check**: with `network_mode: host` Docker publishes no ports and never checks whether `PORT` is free. `app-entrypoint.sh` waits (up to 10s) for `init-server.js` to either bind (it touches `/tmp/loop-init/listening`) or exit. If the port is taken, the server prints what to do (`ss -ltnp`, or set `PORT` in `.env`) and exits 98, and the entrypoint stops the container before any slow work. `server.js` prints the same message on `EADDRINUSE`.
+
 ## Architecture
 
 A project management UI ("Loop") for running Claude Code agents against multiple projects. Two components:

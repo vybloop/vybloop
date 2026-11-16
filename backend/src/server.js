@@ -1427,6 +1427,15 @@ pruneStorage();
 setInterval(pruneStorage, 24 * 60 * 60 * 1000).unref();
 
 const PORT = process.env.PORT || 9876;
+// In the container, app-entrypoint.sh has already checked the port (via
+// init-server.js), but something could grab it during the handover, and running
+// the server directly skips that check.
+server.on('error', err => {
+  if (err.code !== 'EADDRINUSE') throw err;
+  console.error(`[loop] ERROR: port ${PORT} is already in use. Loop binds it on the host (host networking); ` +
+    `find the listener with: ss -ltnp 'sport = :${PORT}', then stop it or set PORT in .env.`);
+  process.exit(1);
+});
 server.listen(PORT, () => {
   console.log(`Loop server running on port ${PORT}`);
   //restoreComposeStates().catch(console.error);
