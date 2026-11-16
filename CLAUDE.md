@@ -39,7 +39,7 @@ Single JSON file backing the project list. Edited directly by `backend/src/data.
       "repo": "github.com/...",
       "description": "...",
       "branch": "main",
-      "template": "vite-react",
+      "template": "web-app",
       "port": 22014,                          // stable HOST_PORT for this project
       "agentCli": "codex",                    // optional per-project override of config.agentCli
       "folderId": "work",                     // optional; home-screen folder (top-level projects only)

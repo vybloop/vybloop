@@ -109,139 +109,50 @@ Fill in the rest of this section based on the answers in the first section.
 ${SHARED_FOOTER}`,
   },
   {
-    id: 'vite-react',
-    name: 'Vite + React',
+    id: 'web-app',
+    name: 'Web app',
     claudeMd: `# CLAUDE.md
 
-This file gives Claude Code guidance for working in this project.
+This file has a concise description of the project and guidance for working in it. Update this file after every task even if the user doesn't explicitly ask you to, and ensure the document stays up to date.
+Remove any instructions from this file that are intended to be followed once after you have followed them (e.g. for initial setup of the project).
+
+This repo is mostly empty, and is intended to be a web app. The first time the user asks you to do any work on this project, work out the answers to the questions below and record them here. Skip any question the user's request already answers, and ask the rest together in one short message rather than one at a time. If the user isn't sure, say which default you'll pick and move on; these can be revisited later.
+
+- What does the app do, in a sentence or two?
+- Who will use it: just you, a small group (family, team, friends), or the public? Roughly how many people at the same time?
+- Does it need to save data? If so, is it private to each person/device, or shared between users?
+- Do users need to log in, or have different permissions?
+- How app-like is the interface: mostly pages, content and forms, or a rich interactive UI with many views and lots of client-side state?
+- Does it need live updates (seeing other users' changes as they happen), outside services or APIs, or a specific library or language (e.g. a Python data or ML library)?
+
+Based on the answers to these questions, decide on a stack and fill out the section below. Briefly tell the user what you chose and why before building.
+
+Suggested stacks and technologies. These are defaults and guidelines, not strict rules: if the app's needs point somewhere else, use your judgment and note the reasoning in the Stack section. Err on the side of the simplest thing that meets the needs the user described, not ones they might have someday.
+ - Frontend: vanilla JS, using Web Components for structure and CSS for styling, loaded as native ES modules with no build step. This keeps iteration fast and has a clear path forward: a few dependencies can come from a CDN as ES modules (pin exact versions, e.g. via an import map); if the dependency list grows, add npm and a bundler (Vite) at that point.
+ - Reach for a framework (e.g. React or Svelte with Vite) only when the UI is genuinely complex: many interdependent views and a lot of shared client-side state, or a component library the user specifically wants.
+ - No backend if none is needed: static content, or data that only lives on one device (localStorage/IndexedDB). Serve it from a lightweight nginx container.
+ - If a backend is needed, keep it small. Node.js is a good default for apps without real scaling needs, because code (validation, data shapes, formatting) can be shared with the frontend. Prefer plain ES modules ("type": "module") and put code used by both sides in shared/, free of DOM- and Node-specific APIs; the server can serve shared/ statically so the browser imports the same files without a bundler. Keep server dependencies minimal (Node's built-in http, or a small framework like Express).
+ - Use Go instead when the app expects real load (public, many concurrent users), does heavy concurrent work, or benefits from a single small static binary. Its standard library covers HTTP, JSON and static files without a framework. Use Python (e.g. FastAPI) when the app depends on Python libraries.
+ - Storage: match it to the scale. A JSON file is fine for small, rarely-written data with one writer. SQLite is the default for anything more: one file, no extra service, and plenty for a small group of users. Add a database server (PostgreSQL) only for many concurrent writers, multiple backend instances, or features that need it. Whatever holds data must live on a named volume in docker-compose.yml, so it survives rebuilds and restarts.
+ - Live updates: Server-Sent Events when data only flows from server to browser, WebSockets when it flows both ways.
+ - Logins: avoid them if the users are just the owner or a trusted group. If access must be limited, start with the simplest thing that works (e.g. a single shared password) and only build full accounts when users genuinely need their own identities. Never store plain-text passwords; use an established library for hashing and sessions.
+ - The app should be designed to serve from a single container where possible, with frontend content served by the backend when there is one. Extra services (a database server, a worker) go in the same docker-compose.yml.
 
 ## Stack
 
-- **Vite** dev server and bundler.
-- **React** with TypeScript.
+This application runs in the browser, and should be served from a container. A Dockerfile and docker-compose.yml file should be created in the root of the repository.
+Fill in the rest of this section based on the answers in the first section.
 
-## Conventions
+- TBD
 
-- Components live under \`src/\`; keep one component per file.
-- Run \`npm run build\` to confirm the build passes before finishing. The user
-  runs the app through the root \`docker-compose.yml\` (see below), not
-  \`npm run dev\`.
-${SHARED_FOOTER}`,
-  },
-  {
-    id: 'sveltekit',
-    name: 'SvelteKit',
-    claudeMd: `# CLAUDE.md
+## File structure
 
-This file gives Claude Code guidance for working in this project.
+- Dockerfile - configure this to serve the app from a container
+- docker-compose.yml - configure this to serve the app from a container. Publish the host port through the \`\${HOST_PORT}\` environment variable (see "Running the app in Loop" below) rather than hard-coding one.
+- frontend/ - should contain front end code
+- backend/ - should contain backend code, if necessary
+- shared/ - code used by both frontend and backend, if there is a Node backend
 
-## Stack
-
-- **SvelteKit** with TypeScript.
-
-## Conventions
-
-- Routes live under \`src/routes/\` using SvelteKit's file-based routing.
-- Shared code goes in \`src/lib/\` (import via \`$lib\`).
-- Run \`npm run build\` to verify before finishing. The user runs the app
-  through the root \`docker-compose.yml\` (see below), not \`npm run dev\`.
-${SHARED_FOOTER}`,
-  },
-  {
-    id: 'astro',
-    name: 'Astro',
-    claudeMd: `# CLAUDE.md
-
-This file gives Claude Code guidance for working in this project.
-
-## Stack
-
-- **Astro** for content-focused, mostly-static sites.
-
-## Conventions
-
-- Pages live under \`src/pages/\`; components under \`src/components/\`.
-- Ship zero client JS by default; add a framework island only when a piece of
-  UI genuinely needs interactivity.
-- Run \`npm run build\` to verify before finishing. The user runs the app
-  through the root \`docker-compose.yml\` (see below), not \`npm run dev\`.
-${SHARED_FOOTER}`,
-  },
-  {
-    id: 'remix',
-    name: 'Remix',
-    claudeMd: `# CLAUDE.md
-
-This file gives Claude Code guidance for working in this project.
-
-## Stack
-
-- **Remix** with React and TypeScript.
-
-## Conventions
-
-- Routes live under \`app/routes/\` using Remix's file-based routing with
-  \`loader\`/\`action\` data functions.
-- Prefer Remix's built-in data loading over client-side fetching.
-- Run \`npm run build\` to verify before finishing. The user runs the app
-  through the root \`docker-compose.yml\` (see below), not \`npm run dev\`.
-${SHARED_FOOTER}`,
-  },
-  {
-    id: 'rust-cli',
-    name: 'Rust CLI (clap)',
-    claudeMd: `# CLAUDE.md
-
-This file gives Claude Code guidance for working in this project.
-
-## Stack
-
-- **Rust** command-line application using **clap** for argument parsing.
-
-## Conventions
-
-- Source lives under \`src/\`; the entry point is \`src/main.rs\`.
-- Define the CLI with clap's derive API.
-- Run \`cargo run\` to try it, \`cargo build\` to compile, \`cargo test\` for
-  tests, and \`cargo clippy\` to lint before finishing.
-${SHARED_FOOTER}`,
-  },
-  {
-    id: 'fastapi-postgres',
-    name: 'FastAPI + Postgres',
-    claudeMd: `# CLAUDE.md
-
-This file gives Claude Code guidance for working in this project.
-
-## Stack
-
-- **FastAPI** (Python) backed by **PostgreSQL**.
-
-## Conventions
-
-- Application code lives under \`app/\`; define routes with FastAPI routers.
-- Use Pydantic models for request/response schemas.
-- The root \`docker-compose.yml\` runs the app (\`uvicorn app.main:app\`) and a
-  Postgres \`db\` service; keep the database's host port unpublished.
-- Keep database access in a dedicated layer rather than inline in route handlers.
-${SHARED_FOOTER}`,
-  },
-  {
-    id: 'expo',
-    name: 'Expo (React Native)',
-    claudeMd: `# CLAUDE.md
-
-This file gives Claude Code guidance for working in this project.
-
-## Stack
-
-- **Expo** / **React Native** with TypeScript.
-
-## Conventions
-
-- Screens and components live under \`app/\` (Expo Router) or \`src/\`.
-- Use Expo SDK modules instead of bare native modules where possible.
-- Run \`npx expo start\` to launch the dev server.
 ${SHARED_FOOTER}`,
   },
 ];
