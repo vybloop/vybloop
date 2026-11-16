@@ -383,14 +383,21 @@ export async function syncProject(id) {
     return { ok: true };
   }
 
-  await runGitResult(cwd, ['fetch']);
+  // A failed fetch (auth, network) would otherwise leave the ahead/behind
+  // counts below computed against a stale remote-tracking ref.
+  const fetchRes = await runGitResult(cwd, ['fetch']);
+  if (!fetchRes.ok) return { ok: false, error: fetchRes.stderr.trim() || 'fetch failed' };
 
   const behindRes = await runGitResult(cwd, ['rev-list', '--count', 'HEAD..@{u}']);
   const behind = parseInt(behindRes.stdout.trim(), 10) || 0;
 
   if (behind > 0) {
     const rebaseRes = await runGitResult(cwd, ['rebase', '@{u}']);
-    if (!rebaseRes.ok) return { ok: false, error: rebaseRes.stderr.trim() || 'rebase failed' };
+    if (!rebaseRes.ok) {
+      // Don't leave the repo mid-rebase with conflict markers in the tree.
+      await runGitResult(cwd, ['rebase', '--abort']);
+      return { ok: false, error: rebaseRes.stderr.trim() || rebaseRes.stdout.trim() || 'rebase failed' };
+    }
   }
 
   const aheadRes = await runGitResult(cwd, ['rev-list', '--count', '@{u}..HEAD']);
@@ -890,7 +897,8 @@ export async function stageAll(id) {
   const p = projects.find(p => p.id === id);
   if (!p) return null;
   const cwd = gitDir(id);
-  await runGit(cwd, ['add', '-A']);
+  const res = await runGitResult(cwd, ['add', '-A']);
+  if (!res.ok) return { error: res.stderr.trim() || 'git add failed' };
   return getGitChanges(id);
 }
 
@@ -1194,9 +1202,11 @@ export async function revertFile(id, fileId) {
     rmSync(abs, { recursive: true, force: true });
   } else {
     if (isStaged) {
-      await runGit(cwd, ['restore', '--staged', '--', filePath]);
+      const res = await runGitResult(cwd, ['restore', '--staged', '--', filePath]);
+      if (!res.ok) return { error: res.stderr.trim() || 'git restore failed' };
     }
-    await runGit(cwd, ['restore', '--', filePath]);
+    const res = await runGitResult(cwd, ['restore', '--', filePath]);
+    if (!res.ok) return { error: res.stderr.trim() || 'git restore failed' };
   }
 
   return { ok: true };
@@ -1216,12 +1226,10 @@ export async function toggleStage(id, fileId) {
   const Y = entry ? entry[1] : ' ';
   const currentlyStaged = X !== ' ' && X !== '?';
 
-  if (currentlyStaged) {
-    // Unstage: use git restore --staged, fall back to git reset for older git
-    await runGit(cwd, ['restore', '--staged', '--', filePath]);
-  } else {
-    await runGit(cwd, ['add', '--', filePath]);
-  }
+  const res = currentlyStaged
+    ? await runGitResult(cwd, ['restore', '--staged', '--', filePath])
+    : await runGitResult(cwd, ['add', '--', filePath]);
+  if (!res.ok) return { error: res.stderr.trim() || `git ${currentlyStaged ? 'restore' : 'add'} failed` };
 
   // Return updated file state
   const statusOut2 = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--', filePath]);

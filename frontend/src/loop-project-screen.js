@@ -78,7 +78,7 @@ class LoopProjectScreen extends LitElement {
     _mobileInput: { state: true },
     _remoteStatus: { state: true },
     _syncing: { state: true },
-    _commitError: { state: true },
+    _gitError: { state: true },
     _identityNeeded: { state: true },
     _identityName: { state: true },
     _identityEmail: { state: true },
@@ -745,12 +745,6 @@ class LoopProjectScreen extends LitElement {
     }
     .commit-btn:hover:not(:disabled) { opacity: 0.85; }
     .commit-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-    .commit-error {
-      font-size: 11px;
-      color: var(--del);
-      line-height: 1.4;
-      word-break: break-word;
-    }
     .identity-card {
       background: var(--bg-2);
       border: 1px solid var(--line);
@@ -1941,7 +1935,7 @@ class LoopProjectScreen extends LitElement {
     this._mobileInput = '';
     this._remoteStatus = null;
     this._syncing = false;
-    this._commitError = '';
+    this._gitError = null;
     this._identityNeeded = false;
     this._identityName = '';
     this._identityEmail = '';
@@ -2193,7 +2187,7 @@ class LoopProjectScreen extends LitElement {
     this._stale = false;
     this._buildError = '';
     this._commitMsg = '';
-    this._commitError = '';
+    this._gitError = null;
     this._committed = false;
     this._claudeLink = null;
     this._dismissOsc52();
@@ -2788,9 +2782,12 @@ class LoopProjectScreen extends LitElement {
     });
   }
 
-  // Items for the sidebar status bar. Only uploads use it for now.
+  // Items for the sidebar status bar: git errors, upload errors and upload progress.
   _statusItems() {
     const items = [];
+    if (this._gitError) {
+      items.push({ id: 'git-error', label: this._gitError.label, detail: this._gitError.message, error: true, dismissible: true });
+    }
     if (this._uploadError) {
       items.push({ id: 'upload-error', label: 'Upload failed', detail: this._uploadError, error: true, dismissible: true });
     }
@@ -3010,11 +3007,12 @@ class LoopProjectScreen extends LitElement {
     if (!this.project) return;
     try {
       const res = await fetch(`/api/projects/${this.project.id}/changes/${file.id}/revert`, { method: 'POST' });
-      if (res.ok) {
+      if (await this._checkGitResponse(res, 'Revert failed')) {
         this._files = this._files.filter(f => f.id !== file.id);
       }
     } catch (e) {
       console.error('Failed to revert file', e);
+      this._gitError = { label: 'Revert failed', message: e.message };
     }
   }
 
@@ -4350,19 +4348,34 @@ class LoopProjectScreen extends LitElement {
     }
   }
 
+  // For git routes: on a non-2xx response (or a `{ ok: false }` body), puts the
+  // backend's error — usually git's stderr — in the sidebar status bar and
+  // returns false. The body is only read on failure, so callers can still
+  // `res.json()` a success.
+  async _checkGitResponse(res, label) {
+    if (res.ok) {
+      const body = await res.clone().json().catch(() => null);
+      if (body?.ok !== false) return true;
+      this._gitError = { label, message: body.error || 'git operation failed' };
+      return false;
+    }
+    const body = await res.json().catch(() => null);
+    this._gitError = { label, message: body?.error || `request failed (${res.status})` };
+    return false;
+  }
+
   async _sync() {
     if (!this.project || this._syncing) return;
     this._syncing = true;
+    this._gitError = null;
+    const label = this._remoteStatus?.hasUpstream === false ? 'Publish failed' : 'Sync failed';
     try {
       const res = await fetch(`/api/projects/${this.project.id}/sync`, { method: 'POST' });
-      if (res.ok) {
-        const result = await res.json();
-        if (result.ok) {
-          await this._loadChanges();
-        }
-      }
+      if (!(await this._checkGitResponse(res, label))) return;
+      await this._loadChanges();
     } catch (e) {
       console.error('Failed to sync', e);
+      this._gitError = { label, message: e.message };
     } finally {
       this._syncing = false;
     }
@@ -4377,10 +4390,9 @@ class LoopProjectScreen extends LitElement {
       const res = await fetch(`/api/projects/${this.project.id}/changes/${file.id}/toggle`, {
         method: 'POST',
       });
-      if (res.ok) {
-        const updated = await res.json();
-        this._files = this._files.map(f => f.id === updated.id ? updated : f);
-      }
+      if (!(await this._checkGitResponse(res, file.staged ? 'Unstage failed' : 'Stage failed'))) return;
+      const updated = await res.json();
+      this._files = this._files.map(f => f.id === updated.id ? updated : f);
     } catch (e) {
       // Optimistic update on failure
       this._files = this._files.map(f =>
@@ -4392,9 +4404,10 @@ class LoopProjectScreen extends LitElement {
   async _stageAll() {
     try {
       const res = await fetch(`/api/projects/${this.project.id}/changes/stage-all`, { method: 'POST' });
-      if (res.ok) this._files = await res.json();
+      if (await this._checkGitResponse(res, 'Stage failed')) this._files = await res.json();
     } catch (e) {
       console.error('Failed to stage all', e);
+      this._gitError = { label: 'Stage failed', message: e.message };
     }
   }
 
@@ -4450,6 +4463,7 @@ class LoopProjectScreen extends LitElement {
     const staged = this._staged();
     if (staged.length === 0) return;
     this._committing = true;
+    this._gitError = null;
     try {
       const res = await fetch(`/api/projects/${this.project.id}/commit`, {
         method: 'POST',
@@ -4459,7 +4473,7 @@ class LoopProjectScreen extends LitElement {
           paths: staged.map(f => f.path),
         }),
       });
-      const result = await res.json();
+      const result = await res.json().catch(() => ({}));
       if (res.ok && result.ok) {
         this._files = this._files.filter(f => !f.staged);
         this._commitMsg = '';
@@ -4482,10 +4496,11 @@ class LoopProjectScreen extends LitElement {
             if (cfg) { this._identityName = cfg.gitName || ''; this._identityEmail = cfg.gitEmail || ''; }
           });
         } else {
-          this._commitError = msg;
-          setTimeout(() => this._commitError = '', 5000);
+          this._gitError = { label: 'Commit failed', message: msg };
         }
       }
+    } catch (e) {
+      this._gitError = { label: 'Commit failed', message: e.message };
     } finally {
       this._committing = false;
     }
@@ -4993,7 +5008,6 @@ class LoopProjectScreen extends LitElement {
                 @input=${e => this._commitMsg = e.target.value}
                 ?disabled=${staged.length === 0}
               ></textarea>
-              ${this._commitError ? html`<div class="commit-error">${this._commitError}</div>` : ''}
               ${this._identityNeeded ? html`
                 <div class="identity-card">
                   <div class="identity-card-title">Git identity required</div>
@@ -5140,7 +5154,10 @@ class LoopProjectScreen extends LitElement {
         </div>
 
         <loop-status-bar .items=${this._statusItems()}
-          @dismiss=${e => { if (e.detail.id === 'upload-error') this._uploadError = null; }}></loop-status-bar>
+          @dismiss=${e => {
+            if (e.detail.id === 'upload-error') this._uploadError = null;
+            if (e.detail.id === 'git-error') this._gitError = null;
+          }}></loop-status-bar>
       </div>
     `;
   }

@@ -44,10 +44,17 @@ class LoopStatusBar extends LitElement {
       flex: 1;
     }
     .item.error .label { color: var(--del); }
+    /* Error details are often multi-line tool output (git stderr): give them
+       their own row under the label, keep line breaks, and cap the height. */
+    .item.error .text { flex-wrap: wrap; }
     .item.error .detail {
+      order: 3;
+      flex-basis: 100%;
       color: var(--fg-2);
-      white-space: normal;
+      white-space: pre-wrap;
       word-break: break-word;
+      max-height: 9em;
+      overflow-y: auto;
     }
     .dismiss {
       flex-shrink: 0;

@@ -626,6 +626,7 @@ app.post('/api/projects/:id/sync', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'not found' });
   const result = await syncProject(req.params.id);
   if (!result) return res.status(404).json({ error: 'not found' });
+  if (!result.ok) return res.status(500).json(result);
   res.json(result);
 });
 
@@ -633,6 +634,8 @@ app.post('/api/projects/:id/changes/stage-all', async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });
   const files = await stageAll(req.params.id);
+  if (!files) return res.status(404).json({ error: 'not found' });
+  if (files.error) return res.status(500).json(files);
   res.json(files);
 });
 
@@ -641,6 +644,7 @@ app.post('/api/projects/:id/changes/:fileId/toggle', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'not found' });
   const result = await toggleStage(req.params.id, req.params.fileId);
   if (!result) return res.status(404).json({ error: 'file not found' });
+  if (result.error) return res.status(500).json(result);
   res.json(result);
 });
 
