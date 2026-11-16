@@ -10,11 +10,22 @@ const SHARED_FOOTER = `
 - Match the existing style, naming, and structure of the surrounding code.
 - Prefer the project's existing dependencies over adding new ones.
 
-## Host ports
+## Running the app in Loop
+
+The user can't reach anything listening inside the agent's sandbox, so a dev
+server started there is invisible to them. Loop runs the app with its **Run**
+button, which appears once a \`docker-compose.yml\` exists at the repo root and
+runs \`compose up --build\`. If this project is served over HTTP (a site, web
+app, browser game or web API) and has no compose file yet, add a \`Dockerfile\`
+that installs dependencies and builds the app, plus a root \`docker-compose.yml\`
+that serves it. Verify by building and starting the app in the sandbox, then
+tell the user to press **Run** (or **Restart** after later changes). Things
+that aren't served (a browser extension, CLI, library) need no compose file:
+build them and hand the result over with Loop's share script.
 
 The host port is assigned by Loop and passed in as the \`HOST_PORT\` environment
-variable when the app is started. Never hard-code a host port: a
-\`docker-compose.yml\` must publish through that variable, e.g.
+variable when the app is started. New compose files should publish through that
+variable rather than a fixed host port, e.g.
 
 \`\`\`yaml
 services:
@@ -24,7 +35,8 @@ services:
 \`\`\`
 
 The container-side port (\`8080\` above) is the project's own choice and can be
-whatever the app listens on. Only the host side comes from \`HOST_PORT\`.
+whatever the app listens on. Only the host side comes from \`HOST_PORT\`. Leave
+port mappings in an existing compose file alone unless asked to change them.
 
 A service that needs \`network_mode: host\` has no port mapping, so it must
 listen on \`HOST_PORT\` itself instead, e.g. \`environment: [ "PORT=\${HOST_PORT}" ]\`.
@@ -89,7 +101,7 @@ Fill in the rest of this section based on the answers in the first section.
 ## File structure
 
 - Dockerfile - configure this to serve the game from a container
-- docker-compose.yml - configure this to serve the game from a container. Publish the host port through the \`\${HOST_PORT}\` environment variable (see "Host ports" below) rather than hard-coding one.
+- docker-compose.yml - configure this to serve the game from a container. Publish the host port through the \`\${HOST_PORT}\` environment variable (see "Running the app in Loop" below) rather than hard-coding one.
 - frontend/ - should contain front end code
 - backend/ - should contain backend code, if necessary
 - shared/ - code used by both frontend and backend (game rules, simulation, message formats), if there is a backend
@@ -111,8 +123,9 @@ This file gives Claude Code guidance for working in this project.
 ## Conventions
 
 - Components live under \`src/\`; keep one component per file.
-- Run \`npm run dev\` during development and \`npm run build\` to confirm the
-  build passes before finishing.
+- Run \`npm run build\` to confirm the build passes before finishing. The user
+  runs the app through the root \`docker-compose.yml\` (see below), not
+  \`npm run dev\`.
 ${SHARED_FOOTER}`,
   },
   {
@@ -130,7 +143,8 @@ This file gives Claude Code guidance for working in this project.
 
 - Routes live under \`src/routes/\` using SvelteKit's file-based routing.
 - Shared code goes in \`src/lib/\` (import via \`$lib\`).
-- Run \`npm run dev\` to develop and \`npm run build\` to verify before finishing.
+- Run \`npm run build\` to verify before finishing. The user runs the app
+  through the root \`docker-compose.yml\` (see below), not \`npm run dev\`.
 ${SHARED_FOOTER}`,
   },
   {
@@ -149,7 +163,8 @@ This file gives Claude Code guidance for working in this project.
 - Pages live under \`src/pages/\`; components under \`src/components/\`.
 - Ship zero client JS by default; add a framework island only when a piece of
   UI genuinely needs interactivity.
-- Run \`npm run dev\` to develop and \`npm run build\` to verify before finishing.
+- Run \`npm run build\` to verify before finishing. The user runs the app
+  through the root \`docker-compose.yml\` (see below), not \`npm run dev\`.
 ${SHARED_FOOTER}`,
   },
   {
@@ -168,7 +183,8 @@ This file gives Claude Code guidance for working in this project.
 - Routes live under \`app/routes/\` using Remix's file-based routing with
   \`loader\`/\`action\` data functions.
 - Prefer Remix's built-in data loading over client-side fetching.
-- Run \`npm run dev\` to develop and \`npm run build\` to verify before finishing.
+- Run \`npm run build\` to verify before finishing. The user runs the app
+  through the root \`docker-compose.yml\` (see below), not \`npm run dev\`.
 ${SHARED_FOOTER}`,
   },
   {
@@ -205,7 +221,8 @@ This file gives Claude Code guidance for working in this project.
 
 - Application code lives under \`app/\`; define routes with FastAPI routers.
 - Use Pydantic models for request/response schemas.
-- Run the dev server with \`uvicorn app.main:app --reload\`.
+- The root \`docker-compose.yml\` runs the app (\`uvicorn app.main:app\`) and a
+  Postgres \`db\` service; keep the database's host port unpublished.
 - Keep database access in a dedicated layer rather than inline in route handlers.
 ${SHARED_FOOTER}`,
   },

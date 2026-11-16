@@ -15,14 +15,12 @@ const NOTIFY_SCRIPT = '/claudeconfig/loop-notify-done.sh';
 // takes them via --append-system-prompt; Codex has no such flag, so they are
 // written to $CODEX_HOME/AGENTS.md, which it loads as global instructions.
 export const AGENT_INSTRUCTIONS = [
-  'You are running inside a Linux sandbox container.',
-  'You may freely install any Linux tools or packages you need (e.g. via apt-get, pip, npm, cargo, etc.).',
-  'You cannot run Docker or Podman containers directly inside this sandbox.',
-  'If the project has a docker-compose.yml at the repo root, instruct the user to start or restart the app using the "Run" or "Restart" button in the Loop UI — do not attempt to run compose yourself.',
-  'Tools the project needs in every session (system packages, SDKs, CLIs) belong in `.loop/sandbox.Dockerfile`: a Dockerfile fragment of RUN/ENV/COPY lines (no FROM — Loop layers it on the base sandbox image, with `.loop/` as the build context) that is built once and cached, so new sessions and workstreams start with the tools already installed. Prefer it over setup scripts. When you add something there, also install it in this session so you can keep working; the image is rebuilt the next time the sandbox starts, so tell the user to restart the sandbox from the Loop menu to verify the build. Keep each RUN self-contained (e.g. `apt-get update && apt-get install -y …`).',
-  'Loop also has a shared library of tool layers, listed with their Dockerfile fragments in /claudeconfig/loop-sandbox-layers.json. Before writing an install yourself, check it: if a layer covers what you need, add its id to `.loop/sandbox.json` as `{ "use": ["<id>", …] }` instead of copying the fragment. Use the fragment only for what the library lacks.',
-  'Compose files must never hard-code a host port: the host port is assigned automatically and passed in as the HOST_PORT environment variable, so publish ports as "${HOST_PORT}:<container port>". A service that needs `network_mode: host` publishes nothing; it must instead listen on port ${HOST_PORT} itself (e.g. pass it in via `environment:`).',
-  'To share a file with the user, run `sh /claudeconfig/loop-share.sh <file-or-directory> [caption]` — it appears in a side panel in the Loop UI, where images are previewed and anything else can be downloaded. Use it whenever a picture (e.g. a screenshot) explains the result better than text, and to hand over deliverables such as a built app, installer, binary, PDF or data export. Sharing a directory archives it first (zip), so share the build output directory (e.g. dist/), not the whole repo or node_modules.',
+  'You are in a Linux sandbox container. Install any tools you need (apt-get, pip, npm, cargo…). You cannot run Docker or Podman containers here.',
+  'The user works through the Loop web UI and cannot reach anything listening in this sandbox, so a dev server or localhost URL here is invisible to them. They open web apps with the "Run" button in Loop, which runs `compose up --build` on a root docker-compose.yml. So when you build something served over HTTP for a browser (website, web app, browser game, web API) and there is no compose file yet, add a Dockerfile that installs and builds the app and a root docker-compose.yml that serves it, even if not asked, unless CLAUDE.md/AGENTS.md says otherwise. Use one service unless the app needs more (e.g. a database). You cannot run compose here: verify by starting the app in the sandbox and curling it, then tell the user to press "Run" (or "Restart" after changes). Deliverables that are not served (browser extension, CLI, desktop/mobile app, library) need no compose file; build them and share the result (see below).',
+  'In new compose files, publish the Loop-assigned port as "${HOST_PORT}:<container port>" (a `network_mode: host` service instead listens on ${HOST_PORT} itself, passed via `environment:`). Leave existing port mappings alone unless asked.',
+  'Tools needed in every session belong in `.loop/sandbox.Dockerfile`, not setup scripts: a Dockerfile fragment (RUN/ENV/COPY, no FROM; build context `.loop/`) that Loop layers on the base image and caches. Keep each RUN self-contained (`apt-get update && apt-get install -y …`). Also install the tool in this session; the image rebuilds on the next sandbox start, so ask the user to restart the sandbox from the Loop menu to verify the build.',
+  'Before writing a fragment, check the shared layer library in /claudeconfig/loop-sandbox-layers.json; to use a layer, add its id to `.loop/sandbox.json` (`{ "use": ["<id>"] }`) instead of copying it.',
+  'To show or hand over a file, run `sh /claudeconfig/loop-share.sh <file-or-dir> [caption]`; it appears in a Loop side panel (images previewed, others downloadable). Use it for screenshots that explain a result and for deliverables (built apps, binaries, PDFs, exports). Directories are zipped, so share the build output (e.g. dist/), not the repo or node_modules.',
 ];
 
 // Hardware virtualisation, when the host has it. app-entrypoint.sh makes the
@@ -31,7 +29,7 @@ export const AGENT_INSTRUCTIONS = [
 const HAS_KVM = existsSync('/dev/kvm');
 export const KVM_DEVICE = HAS_KVM ? ['--device', '/dev/kvm'] : [];
 if (HAS_KVM) {
-  AGENT_INSTRUCTIONS.push('/dev/kvm is available in this sandbox, so QEMU and other VMs can use KVM acceleration (e.g. `-accel kvm`). A compose service that needs it must request it with `devices: ["/dev/kvm:/dev/kvm"]`.');
+  AGENT_INSTRUCTIONS.push('/dev/kvm is available, so VMs can use KVM acceleration (e.g. QEMU `-accel kvm`); a compose service needs `devices: ["/dev/kvm:/dev/kvm"]` for it.');
 }
 
 // nano is installed in claude-inner and set as git's core.editor; exporting it
