@@ -55,6 +55,30 @@ const SPINNER_INTERVAL_MS = 250;
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
 
+// Mermaid diagrams in markdown previews, written the GitHub way as ```mermaid
+// fenced blocks. The library is large, so it is only fetched the first time a
+// preview contains one. Rendered SVGs are cached by diagram source, so
+// re-rendering a file (a disk change, switching tabs) only redraws diagrams
+// whose text actually changed.
+let mermaidLoader = null;
+function loadMermaid(fontFamily) {
+  mermaidLoader ??= import('mermaid').then(({ default: mermaid }) => {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',      // mermaid sanitizes labels and disables click handlers
+      suppressErrorRendering: true, // don't leave a "syntax error" bomb in document.body
+      theme: 'dark',
+      fontFamily: fontFamily || undefined,
+    });
+    return mermaid;
+  });
+  return mermaidLoader;
+}
+const MERMAID_CACHE_MAX = 200;
+const mermaidResults = new Map();  // source -> { svg } | { error }
+const mermaidInFlight = new Set(); // sources currently rendering
+let mermaidSeq = 0;
+
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']);
 
 const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'aac', 'weba']);
@@ -1662,6 +1686,13 @@ class LoopProjectScreen extends LitElement {
     .md-body img { max-width: 100%; }
     .md-body input[type="checkbox"] { margin: 0 0.4em 0 -1.3em; vertical-align: middle; }
     .md-body li:has(> input[type="checkbox"]) { list-style: none; }
+    .md-body .mermaid-diagram { margin: 0 0 1em; text-align: center; overflow-x: auto; }
+    .md-body .mermaid-diagram svg { max-width: 100%; height: auto; }
+    .md-body .mermaid-error {
+      margin: 0 0 0.4em;
+      color: var(--warn);
+      font-size: 0.9em;
+    }
 
     /* Mobile input FAB + bar */
     :host {
@@ -4686,11 +4717,64 @@ class LoopProjectScreen extends LitElement {
       seen.set(base, n + 1);
       h.id = n ? `${base}-${n}` : base;
     }
+    // ```mermaid blocks: swap in the rendered SVG when we have it; until then
+    // the source stays visible as a code block.
+    const pending = [];
+    for (const code of frag.querySelectorAll('pre > code.language-mermaid')) {
+      const pre = code.parentElement;
+      const src = code.textContent;
+      const result = mermaidResults.get(src);
+      if (result?.svg) {
+        const box = document.createElement('div');
+        box.className = 'mermaid-diagram';
+        box.innerHTML = result.svg;   // produced by mermaid in strict mode from sanitized text
+        pre.replaceWith(box);
+      } else if (result?.error) {
+        const note = document.createElement('div');
+        note.className = 'mermaid-error';
+        note.textContent = `Unable to render Mermaid diagram: ${result.error}`;
+        pre.before(note);
+      } else {
+        pending.push(src);
+      }
+    }
+    if (pending.length) this._renderMermaidDiagrams(path, pending);
     const holder = document.createElement('div');
     holder.appendChild(frag);
     const html = holder.innerHTML;
     this._markdownCache.set(path, { versionId, html });
     return html;
+  }
+
+  async _renderMermaidDiagrams(path, sources) {
+    const todo = [...new Set(sources)].filter(src => !mermaidInFlight.has(src));
+    if (!todo.length) return;
+    todo.forEach(src => mermaidInFlight.add(src));
+    try {
+      let mermaid;
+      try {
+        mermaid = await loadMermaid(getComputedStyle(this).getPropertyValue('--font-sans').trim());
+      } catch (err) {
+        mermaidLoader = null;   // let a later preview retry the import
+        for (const src of todo) mermaidResults.set(src, { error: `could not load Mermaid (${err?.message || err})` });
+        return;
+      }
+      for (const src of todo) {
+        try {
+          const { svg } = await mermaid.render(`loop-mermaid-${++mermaidSeq}`, src);
+          mermaidResults.set(src, { svg });
+        } catch (err) {
+          mermaidResults.set(src, { error: String(err?.message || err).split('\n')[0] });
+        }
+        while (mermaidResults.size > MERMAID_CACHE_MAX) mermaidResults.delete(mermaidResults.keys().next().value);
+      }
+    } finally {
+      todo.forEach(src => mermaidInFlight.delete(src));
+    }
+    // Rebuild the preview HTML with the diagrams in place. The version id is
+    // unchanged, so _syncMarkdownScroll() leaves the scroll position alone.
+    this._markdownCache.delete(path);
+    this.requestUpdate();
   }
 
   // Resolve a link/src from a markdown file to a repo-relative path, or null
